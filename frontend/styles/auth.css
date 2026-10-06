@@ -1,0 +1,141 @@
+.auth-screen {
+  min-height: 100vh;
+  min-height: 100svh;
+  grid-template-columns: minmax(0, 1fr) minmax(25rem, 0.95fr);
+  background: var(--canvas);
+}
+.auth-story {
+  position: relative;
+  display: flex;
+  min-height: 100vh;
+  min-height: 100svh;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: clamp(2rem, 5vw, 5.5rem);
+  background: var(--pine);
+  color: var(--white);
+}
+.auth-story::before {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.024) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.024) 1px, transparent 1px);
+  background-size: 42px 42px;
+  content: "";
+  pointer-events: none;
+  mask-image: linear-gradient(115deg, transparent 10%, #000 100%);
+}
+.auth-story > * { position: relative; z-index: 1; }
+.auth-story .brand-lockup { align-self: flex-start; }
+.auth-story .brand-mark { border-color: rgba(255, 255, 255, 0.16); background: #1d715b; }
+.auth-story .brand-name { color: var(--white); }
+.auth-story-copy { max-width: 42rem; margin-block: auto; padding-block: var(--space-12); }
+.eyebrow-light { margin-bottom: var(--space-5); color: #9fcbb7; }
+.auth-story-copy h1 {
+  max-width: 12ch;
+  margin: 0;
+  color: var(--white);
+  font-size: var(--text-display);
+  font-weight: 570;
+  letter-spacing: -0.075em;
+  line-height: 1.02;
+}
+.auth-story-copy h1 span { color: #b9d9c9; }
+.auth-story-copy > p:last-child {
+  max-width: 34rem;
+  margin: var(--space-6) 0 0;
+  color: rgba(242, 248, 244, 0.75);
+  font-size: clamp(0.95rem, 1.15vw, 1.08rem);
+  line-height: 1.75;
+}
+.auth-timeline { width: min(100%, 30rem); margin-top: auto; }
+.timeline-label { display: block; margin-bottom: var(--space-3); color: rgba(239, 246, 241, 0.78); font-size: var(--text-caption); letter-spacing: 0.02em; }
+.timeline-track { position: relative; display: flex; height: 2.8rem; align-items: center; gap: 0.38rem; }
+.timeline-track::before { position: absolute; right: 0; left: 0; height: 1px; background: rgba(255, 255, 255, 0.18); content: ""; }
+.timeline-track i { position: relative; z-index: 1; width: 17%; height: 1.4rem; border: 1px solid rgba(205, 231, 216, 0.35); border-radius: 0.25rem; background: rgba(232, 247, 236, 0.11); }
+.timeline-track i:nth-child(2) { height: 1.9rem; }
+.timeline-track i:nth-child(3) { height: 1.15rem; }
+.timeline-track i:nth-child(4) { height: 2.35rem; }
+.timeline-track i:nth-child(5) { height: 1.6rem; }
+.timeline-track b { position: absolute; z-index: 2; top: 0; bottom: 0; left: 74%; width: 1px; background: #bce1cd; }
+.timeline-track b::before { position: absolute; top: 0.35rem; left: -0.2rem; width: 0.42rem; height: 0.42rem; border-radius: 50%; background: #bce1cd; content: ""; }
+.timeline-foot { display: flex; justify-content: space-between; gap: var(--space-3); color: rgba(239, 246, 241, 0.72); font-size: 0.64rem; }
+.auth-footnote { margin: var(--space-8) 0 0; color: rgba(239, 246, 241, 0.72); font-size: var(--text-caption); }
+
+.auth-main { display: grid; min-width: 0; place-items: center; padding: clamp(var(--space-5), 5vw, 4.5rem); }
+.auth-card {
+  width: min(100%, 28rem);
+  padding: clamp(var(--space-6), 4vw, 2.65rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+}
+.auth-card > .eyebrow { margin-bottom: var(--space-2); color: var(--accent); }
+.auth-card h2 { margin: 0; font-size: 1.75rem; font-weight: 640; letter-spacing: -0.06em; line-height: 1.18; }
+.auth-subtitle { margin: var(--space-2) 0 var(--space-6); color: var(--text-secondary); font-size: var(--text-small); }
+.signin-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.2rem;
+  margin-bottom: var(--space-5);
+  padding: 0.22rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+.signin-toggle button {
+  min-height: 2.55rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius-sm) - 0.15rem);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-small);
+  font-weight: 600;
+  transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+}
+.signin-toggle button:hover { color: var(--ink); }
+.signin-toggle button.active { background: var(--surface); box-shadow: var(--shadow-hairline); color: var(--ink); }
+.auth-card .field + .field { margin-top: var(--space-4); }
+.auth-card form .btn { margin-top: var(--space-5); min-height: 2.9rem; }
+.auth-card .signin-error { margin-bottom: var(--space-4); }
+.auth-mobile-note { display: none; margin: var(--space-4) 0 0; color: var(--text-muted); font-size: var(--text-caption); text-align: center; }
+
+.splash {
+  position: fixed;
+  z-index: 2000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: var(--canvas);
+  transition: opacity 160ms ease, visibility 160ms ease;
+}
+.splash.leaving { opacity: 0; visibility: hidden; }
+.splash .brand-name { font-size: 1.1rem; }
+
+@media (max-width: 900px) {
+  .auth-screen { display: none; }
+  .auth-screen.active { display: flex; flex-direction: column; }
+  .auth-story { min-height: 0; padding: clamp(var(--space-5), 7vw, var(--space-8)) clamp(var(--space-5), 7vw, var(--space-10)); }
+  .auth-story-copy { margin-block: var(--space-8); padding: 0; }
+  .auth-story-copy h1 { max-width: 14ch; font-size: clamp(2rem, 6.5vw, 3rem); }
+  .auth-story-copy > p:last-child { max-width: 38rem; margin-top: var(--space-3); font-size: var(--text-small); }
+  .auth-timeline { display: none; }
+  .auth-footnote { display: none; }
+  .auth-main { flex: 1; padding: var(--space-6) var(--space-5); }
+  .auth-mobile-note { display: block; }
+}
+
+@media (max-width: 480px) {
+  .auth-story { padding: var(--space-5) var(--space-4) var(--space-4); }
+  .auth-story-copy { margin-block: var(--space-6) var(--space-3); }
+  .auth-story-copy h1 { font-size: clamp(1.9rem, 9vw, 2.5rem); }
+  .auth-story-copy > p:last-child { max-width: 31rem; line-height: 1.55; }
+  .auth-main { padding: var(--space-5) var(--space-4) var(--space-8); }
+  .auth-card { padding: var(--space-5); border-radius: var(--radius-lg); }
+  .auth-card h2 { font-size: 1.55rem; }
+  .auth-subtitle { margin-bottom: var(--space-4); }
+  .signin-toggle { margin-bottom: var(--space-4); }
+}
