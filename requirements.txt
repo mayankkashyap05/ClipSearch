@@ -1,0 +1,30 @@
+# Core API
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+requests
+SQLAlchemy>=2.0
+
+# Auth (bcrypt pinned: passlib 1.7.4 breaks with bcrypt>=4.1)
+PyJWT
+passlib==1.7.4
+bcrypt==4.0.1
+
+# Video / ML pipeline
+yt-dlp
+openai-whisper
+torch
+transformers
+pillow
+numpy
+# soundfile        # optional: only used with pyannote
+# pyannote.audio   # optional: speaker labels (needs free HF_TOKEN)
+sentence-transformers
+
+# Embedded vector DB (local mode, no server)
+qdrant-client
+
+# Tests (optional)
+pytest
+httpx
