@@ -18,25 +18,11 @@ export const state = {
     scopedVideoId: null,
     scopedVideoTitle: null,
     selectedVideoId: null,
-    currentVideo: null,
-    job: null,
-    activeTab: "search", // "search" | "transcript" | "chat" | "chapters" | "overview"
-    searchScope: "video", // "video" | "library"
     jobPollTimer: null,
     activeJobId: null,
     searchResults: [],
     activeResultIndex: -1,
-    searchFilter: "all", // "all" | "speech" | "visual"
-    searchQuery: "",
     searchRequestId: 0,
-    moments: [], // timestamped transcript and visual moments
-    activeMomentIndex: -1,
-    momentsLoading: false,
-    momentsFilter: "",
-    activeChapterIndex: -1,
-    autoFollowTranscript: true,
-    drawerOpen: false,
-    shortcutsOpen: false,
   },
   player: {
     videoId: null,
@@ -47,18 +33,8 @@ export const state = {
     seekRequestId: 0,
     retried: false,
     jumpedAt: 0,
-    duration: 0,
-    currentTime: 0,
-    playbackRate: 1,
-    volume: 1,
-    muted: false,
-    isPlaying: false,
   },
-  chat: {
-    pending: false,
-    requestId: 0,
-    messages: [], // { role: "question" | "answer", text: string, sources: [], videoId: string }
-  },
+  chat: { pending: false, requestId: 0 },
   live: {
     sessions: [],
     selectedId: null,
