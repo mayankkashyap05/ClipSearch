@@ -2,252 +2,158 @@ import { api } from "../../services/api.js";
 import { state } from "../../state/app-state.js";
 import { showToast } from "../../components/feedback.js";
 import { showScreen } from "../../components/navigation.js";
-import { parseChapters } from "../../utils/format.js";
-
-import { createWorkspaceHeader } from "./header.js";
-import { createTimeline } from "./timeline.js";
-import { createSearchPanel } from "./panels/search-panel.js";
-import { createTranscriptPanel } from "./panels/transcript-panel.js";
-import { createChatPanel } from "./panels/chat-panel.js";
-import { createChaptersPanel } from "./panels/chapters-panel.js";
-import { createOverviewPanel } from "./panels/overview-panel.js";
-import { createIngestDrawer } from "./panels/ingest-drawer.js";
-import { createShortcutsModal } from "../../components/shortcuts-modal.js";
+import { escapeHtml, parseChapters } from "../../utils/format.js";
 
 const STAGE_ORDER = ["downloading", "preprocessing", "transcribing", "diarizing", "captioning", "summarizing", "indexing", "done"];
 const STAGE_LABELS = {
   downloading: "Downloading",
   preprocessing: "Preprocessing",
   transcribing: "Transcription",
-  diarizing: "Speaker Diarization",
-  captioning: "Visual Captioning",
+  diarizing: "Speaker diarization",
+  captioning: "Visual captioning",
   summarizing: "Summarizing",
   indexing: "Indexing",
-  done: "Completed",
+  done: "Complete",
 };
 const PROCESSING_STAGES = new Set(["pending", "processing"]);
 
 export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
-  const emptyState = document.getElementById("workspaceEmptyState");
-  const processingState = document.getElementById("workspaceProcessingState");
-  const studioLayout = document.getElementById("workspaceStudioLayout");
-  const pipelineTrack = document.getElementById("pipelineProgressTrack");
-  const processingTitle = document.getElementById("processingTitle");
-  const processingCaption = document.getElementById("processingCaption");
-  const emptyStateAddBtn = document.getElementById("emptyStateAddBtn");
-
-  // Tabs
-  const tabSearch = document.getElementById("tabSearch");
-  const tabTranscript = document.getElementById("tabTranscript");
-  const tabChat = document.getElementById("tabChat");
-  const tabChapters = document.getElementById("tabChapters");
-  const tabOverview = document.getElementById("tabOverview");
-
-  const panelSearch = document.getElementById("panelSearch");
-  const panelTranscript = document.getElementById("panelTranscript");
-  const panelChat = document.getElementById("panelChat");
-  const panelChapters = document.getElementById("panelChapters");
-  const panelOverview = document.getElementById("panelOverview");
-
-  // Sub-controllers
-  const shortcutsModal = createShortcutsModal();
-
-  const ingestDrawer = createIngestDrawer({
-    onIngestSuccess: (jobId, videoId, title) => {
-      beginProcessing(jobId, videoId, title);
-    },
-    refreshVideos,
-  });
-
-  const timeline = createTimeline({ player });
-
-  const header = createWorkspaceHeader({
-    onBack: () => {
-      showScreen("home", { focus: true });
-      if (refreshVideos) refreshVideos();
-    },
-    onOpenIngest: () => ingestDrawer.open("file"),
-    onOpenShortcuts: () => shortcutsModal.open(),
-    onScopeChange: scope => {
-      if (scope === "library") {
-        setTab("search");
-      }
-    },
-  });
-
-  const searchPanel = createSearchPanel({
-    player,
-    timeline,
-    library: {
-      findVideo: async id => {
-        let v = state.library.items.find(item => item.video_id === id);
-        if (!v) {
-          try {
-            const data = await api.listVideos();
-            state.library.items = Array.isArray(data.videos) ? data.videos : [];
-            v = state.library.items.find(item => item.video_id === id);
-          } catch (_e) {}
-        }
-        return v;
-      },
-    },
-    onSelectVideo: video => {
-      openVideoInWorkspace(video);
-    },
-  });
-
-  const transcriptPanel = createTranscriptPanel({ player });
-  const chatPanel = createChatPanel({ player });
-  const chaptersPanel = createChaptersPanel({
-    player,
-    onChapterSelect: start => {
-      // Seek handled by player
-    },
-  });
-  const overviewPanel = createOverviewPanel();
-
-  // Tab Switching
-  const tabs = [
-    { id: "search", btn: tabSearch, pane: panelSearch },
-    { id: "transcript", btn: tabTranscript, pane: panelTranscript },
-    { id: "chat", btn: tabChat, pane: panelChat },
-    { id: "chapters", btn: tabChapters, pane: panelChapters },
-    { id: "overview", btn: tabOverview, pane: panelOverview },
-  ];
-
-  function setTab(tabId) {
-    state.workspace.activeTab = tabId;
-    tabs.forEach(t => {
-      const active = t.id === tabId;
-      if (t.btn) {
-        t.btn.classList.toggle("active", active);
-        t.btn.setAttribute("aria-selected", String(active));
-      }
-      if (t.pane) {
-        t.pane.classList.toggle("active", active);
-        t.pane.hidden = !active;
-      }
-    });
-
-    if (tabId === "search") {
-      requestAnimationFrame(() => searchPanel.focusInput());
-    }
-  }
-
-  tabs.forEach(t => {
-    if (t.btn) {
-      t.btn.addEventListener("click", () => setTab(t.id));
-    }
-  });
+  const centerEmpty = document.getElementById("centerEmpty");
+  const centerContent = document.getElementById("centerContent");
+  const signalPath = document.getElementById("signalPath");
+  const ingestError = document.getElementById("ingestError");
 
   function openWorkspace(focusTarget) {
     showScreen("workspace", { focus: !focusTarget });
-    if (focusTarget === "upload") {
-      ingestDrawer.open("file");
-    } else if (focusTarget === "search") {
-      setTab("search");
-      requestAnimationFrame(() => searchPanel.focusInput());
-    }
+    if (focusTarget === "upload") requestAnimationFrame(() => document.getElementById("dropZone").focus());
+    if (focusTarget === "search") requestAnimationFrame(() => document.getElementById("searchInput").focus());
   }
 
-  function renderPipelineProgress(currentStage, isFailed, isDone) {
-    if (!pipelineTrack) return;
-    const curIdx = STAGE_ORDER.indexOf(currentStage);
-    pipelineTrack.innerHTML = STAGE_ORDER.map((stage, idx) => {
-      let cls = "pipeline-step";
-      let statusIcon = `${idx + 1}`;
-      if (isFailed && idx === Math.max(curIdx, 0)) {
-        cls += " failed";
-        statusIcon = "✕";
-      } else if (isDone || (curIdx >= 0 && idx < curIdx)) {
-        cls += " done";
-        statusIcon = "✓";
-      } else if (idx === curIdx) {
-        cls += " active";
-        statusIcon = "●";
-      }
-      return `
-        <div class="${cls}">
-          <span class="step-num">${statusIcon}</span>
-          <span class="step-name">${STAGE_LABELS[stage]}</span>
-        </div>`;
-    }).join("");
+  function clearIngestError() {
+    ingestError.textContent = "";
   }
 
-  function setViewMode(mode) {
-    // mode: "empty" | "processing" | "studio"
-    if (emptyState) emptyState.hidden = mode !== "empty";
-    if (processingState) processingState.hidden = mode !== "processing";
-    if (studioLayout) studioLayout.hidden = mode !== "studio";
+  function showIngestError(message) {
+    ingestError.textContent = message;
   }
 
   function setScope(videoId, title) {
     state.workspace.scopedVideoId = videoId || null;
     state.workspace.scopedVideoTitle = videoId ? (title || videoId) : null;
-    header.updateScopeUI();
+    const chip = document.getElementById("scopeChip");
+    const chatInput = document.getElementById("chatInput");
+    const chatButton = document.getElementById("chatBtn");
+    const disabledNote = document.getElementById("chatDisabledNote");
+    const chatContext = document.getElementById("chatContext");
+
+    if (videoId) {
+      chip.classList.add("show");
+      document.getElementById("scopeChipLabel").textContent = "Video: " + (title || videoId);
+      chatInput.disabled = state.chat.pending;
+      chatButton.disabled = state.chat.pending;
+      chatInput.placeholder = "Ask about this video…";
+      disabledNote.hidden = true;
+      chatContext.hidden = false;
+      chatContext.textContent = title || videoId;
+    } else {
+      chip.classList.remove("show");
+      chatInput.disabled = true;
+      chatButton.disabled = true;
+      chatInput.placeholder = "Select a video first…";
+      disabledNote.hidden = false;
+      chatContext.hidden = true;
+      chatContext.textContent = "";
+    }
+  }
+
+  function renderSignalSteps(currentStage, failed, completed) {
+    const container = document.getElementById("signalSteps");
+    const currentIndex = STAGE_ORDER.indexOf(currentStage);
+    container.innerHTML = STAGE_ORDER.map((stage, index) => {
+      let className = "";
+      let mark = "";
+      let time = "";
+      if (failed && index === Math.max(currentIndex, 0)) {
+        className = "failed";
+        mark = "×";
+        time = "Failed";
+      } else if (completed || (currentIndex >= 0 && index < currentIndex)) {
+        className = "done";
+        mark = "✓";
+        time = "Done";
+      } else if (currentIndex === index) {
+        className = "active";
+        mark = "·";
+        time = "Running";
+      }
+      return `<div class="signal-step ${className}"><span class="step-check" aria-hidden="true">${mark}</span><span class="signal-step-label">${STAGE_LABELS[stage]}</span><span class="signal-step-time">${time}</span></div>`;
+    }).join("");
+  }
+
+  function setProcessingCaption(status) {
+    const caption = document.querySelector(".signal-caption");
+    if (!caption) return;
+    caption.textContent = status === "pending"
+      ? "Queued — waiting for processing to begin."
+      : "Your video will be searchable when indexing is complete.";
   }
 
   function stopJobPolling() {
-    if (state.workspace.jobPollTimer) {
-      window.clearInterval(state.workspace.jobPollTimer);
-      state.workspace.jobPollTimer = null;
-    }
+    if (state.workspace.jobPollTimer) window.clearInterval(state.workspace.jobPollTimer);
+    state.workspace.jobPollTimer = null;
     state.workspace.activeJobId = null;
   }
 
   function startPollingJob(jobId, videoId, title) {
-    stopJobPolling();
+    if (state.workspace.jobPollTimer) window.clearInterval(state.workspace.jobPollTimer);
     state.workspace.activeJobId = jobId;
-    let isPolling = false;
+    signalPath.hidden = false;
+    let polling = false;
 
     const poll = async () => {
-      if (isPolling || state.workspace.activeJobId !== jobId) return;
-      isPolling = true;
+      if (polling || state.workspace.activeJobId !== jobId) return;
+      polling = true;
       try {
         const job = await api.getJob(jobId);
         if (state.workspace.activeJobId !== jobId) return;
+        const failed = job.status === "failed";
+        const completed = job.status === "completed";
+        renderSignalSteps(job.current_stage, failed, completed);
+        setProcessingCaption(job.status);
 
-        const isFailed = job.status === "failed";
-        const isDone = job.status === "completed";
-        state.workspace.job = job;
-
-        renderPipelineProgress(job.current_stage, isFailed, isDone);
-        if (processingCaption) {
-          processingCaption.textContent = isFailed
-            ? `Processing failed: ${job.error_message || "Unknown error."}`
-            : (job.status === "pending"
-                ? "Queued — waiting for processing worker."
-                : `Currently running: ${STAGE_LABELS[job.current_stage] || job.current_stage}…`);
-        }
-
-        if (isDone || isFailed) {
-          stopJobPolling();
-          if (refreshVideos) refreshVideos();
-
+        if (completed || failed) {
+          if (state.workspace.jobPollTimer) window.clearInterval(state.workspace.jobPollTimer);
+          state.workspace.jobPollTimer = null;
+          refreshVideos();
           if (state.workspace.selectedVideoId === videoId && state.ui.screen === "workspace") {
-            const videoData = {
+            showCenterForVideo({
               video_id: job.video_id,
               filename: title || job.video_id,
               summary: job.summary,
               chapters: job.chapters,
               status: job.status,
               error_message: job.error_message,
-              current_stage: job.current_stage,
-            };
-
-            if (isDone) {
-              showVideoInStudio(videoData, job);
-              showToast("success", "Video indexing complete! Ready to search and interrogate.");
+            });
+            if (failed) {
+              showIngestError(job.error_message
+                ? "Processing failed: " + job.error_message
+                : "Processing failed. You can try adding the video again.");
             } else {
-              showVideoInStudio(videoData, job);
-              showToast("error", `Processing failed: ${job.error_message || "Unknown error"}`);
+              clearIngestError();
+              showToast("success", "Your video is indexed and ready to search.");
             }
           }
         }
-      } catch (_e) {
-        stopJobPolling();
+      } catch (_error) {
+        if (state.workspace.activeJobId === jobId) {
+          if (state.workspace.jobPollTimer) window.clearInterval(state.workspace.jobPollTimer);
+          state.workspace.jobPollTimer = null;
+          if (state.ui.screen === "workspace") {
+            showIngestError("Could not refresh processing status. Check your connection and reopen the video to try again.");
+          }
+        }
       } finally {
-        isPolling = false;
+        polling = false;
       }
     };
 
@@ -256,37 +162,47 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   }
 
   function beginProcessing(jobId, videoId, title) {
-    state.workspace.selectedVideoId = videoId;
-    state.workspace.currentVideo = { video_id: videoId, filename: title, status: "processing" };
-    setScope(videoId, title);
-    setViewMode("processing");
-    if (processingTitle) processingTitle.textContent = `Processing “${title}”`;
-    renderPipelineProgress("downloading", false, false);
-    header.update({ video: { video_id: videoId, filename: title, status: "processing" } });
+    signalPath.hidden = false;
+    state.workspace.activeJobId = jobId;
+    if (videoId) setScope(videoId, title);
+    setProcessingCaption("processing");
+    showCenterForVideo({
+      video_id: videoId,
+      filename: title,
+      status: "processing",
+      summary: "Processing has started. Your summary and chapters will appear here when it’s ready.",
+    });
+    renderSignalSteps("downloading", false, false);
     startPollingJob(jobId, videoId, title);
   }
 
   function openVideoInWorkspace(video) {
-    if (!video || !video.video_id) return;
     stopJobPolling();
     openWorkspace();
-    state.workspace.selectedVideoId = video.video_id;
-    state.workspace.currentVideo = video;
     setScope(video.video_id, video.filename);
-    if (resetChat) resetChat();
-    chatPanel.reset();
+    resetChat();
+    showVideoInCenter(video);
+  }
 
-    const isProcessing = PROCESSING_STAGES.has(String(video.status || "").toLowerCase());
-    if (isProcessing && video.job_id) {
-      setViewMode("processing");
-      if (processingTitle) processingTitle.textContent = `Processing “${video.filename || video.video_id}”`;
-      header.update({ video });
-      startPollingJob(video.job_id, video.video_id, video.filename);
-    } else {
-      showVideoInStudio(video);
-      if (video.job_id) {
+  function openSearchResultVideo(video) {
+    showScreen("workspace");
+    showVideoInCenter(video);
+  }
+
+  function showVideoInCenter(video) {
+    if (!video || !video.video_id) return;
+    state.workspace.selectedVideoId = video.video_id;
+    if (video.job_id) {
+      showCenterForVideo(video);
+      if (PROCESSING_STAGES.has(String(video.status || "").toLowerCase())) {
+        startPollingJob(video.job_id, video.video_id, video.filename);
+      } else {
+        stopJobPolling();
         loadFinalJobDetails(video);
       }
+    } else {
+      centerEmpty.hidden = false;
+      centerContent.classList.remove("show");
     }
   }
 
@@ -294,219 +210,90 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     try {
       const job = await api.getJob(video.job_id);
       if (state.workspace.selectedVideoId !== video.video_id) return;
-      state.workspace.job = job;
-      const mergedVideo = {
+      showCenterForVideo({
         ...video,
         summary: job.summary || video.summary,
-        chapters: job.chapters || video.chapters,
+        chapters: job.chapters,
         status: job.status,
         error_message: job.error_message,
-        current_stage: job.current_stage,
-      };
-      showVideoInStudio(mergedVideo, job);
-    } catch (_e) {}
-  }
-
-  function showVideoInStudio(video, job = null) {
-    setViewMode("studio");
-    state.workspace.currentVideo = video;
-    state.workspace.job = job;
-
-    // Load Player
-    player.ensureVideoLoaded(video);
-
-    // Parse Chapters
-    const chapters = parseChapters((job && job.chapters) || video.chapters);
-    timeline.setChapters(chapters);
-    chaptersPanel.renderChapters(chapters);
-
-    // Update Header & Overview
-    header.update({ video, job });
-    overviewPanel.render({ video, job });
-
-    // Load transcript moments
-    transcriptPanel.loadMomentsForVideo(video.video_id, chapters);
-
-    // If Search results exist, render them
-    if (state.workspace.searchResults.length) {
-      searchPanel.renderResultsList();
+      });
+    } catch (_error) {
+      if (state.workspace.selectedVideoId === video.video_id && state.ui.screen === "workspace") {
+        showToast("error", "Couldn’t load the latest video details. Reopen the video to retry.");
+      }
     }
   }
 
-  function openSearchResultVideo(video) {
-    openVideoInWorkspace(video);
+  function showCenterForVideo(video) {
+    if (video.video_id) {
+      state.workspace.selectedVideoId = video.video_id;
+      player.ensureVideoLoaded(video);
+    }
+    centerEmpty.hidden = true;
+    centerContent.classList.add("show");
+    document.getElementById("centerTitle").textContent = video.filename || video.video_id || "Video";
+    document.getElementById("centerSummary").textContent = video.summary || (video.error_message
+      ? "Processing failed: " + video.error_message
+      : video.status === "failed"
+        ? "Processing did not complete. Try adding this video again if you still need it indexed."
+        : "No summary yet — this video may still be processing.");
+
+    const chaptersLabel = document.getElementById("chaptersLabel");
+    const chaptersDivider = document.getElementById("chaptersDivider");
+    const chaptersContainer = document.getElementById("centerChapters");
+    const chapters = parseChapters(video.chapters);
+    chaptersLabel.hidden = chapters.length === 0;
+    chaptersDivider.hidden = chapters.length === 0;
+    chaptersContainer.innerHTML = chapters.map((chapter, index) => {
+      const label = chapter && (chapter.title || chapter.text) || JSON.stringify(chapter) || "Chapter";
+      return `<div class="chapter-item"><span class="chapter-marker" aria-hidden="true">${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
+    }).join("");
   }
 
-  // Keyboard Navigation Handling
-  function handleGlobalKeyDown(e) {
-    if (state.ui.screen !== "workspace") return;
-
-    const activeEl = document.activeElement;
-    const isInputFocused = activeEl && (
-      activeEl.tagName === "INPUT" ||
-      activeEl.tagName === "TEXTAREA" ||
-      activeEl.isContentEditable
-    );
-
-    // Esc closes modals/drawers or goes back to library
-    if (e.key === "Escape") {
-      if (state.workspace.shortcutsOpen) {
-        shortcutsModal.close();
-        return;
-      }
-      if (state.workspace.drawerOpen) {
-        ingestDrawer.close();
-        return;
-      }
-      if (isInputFocused) {
-        activeEl.blur();
-        return;
-      }
-      // Return to library
+  document.getElementById("clearScope").addEventListener("click", () => setScope(null, null));
+  document.getElementById("backToHome").addEventListener("click", () => {
+    showScreen("home", { focus: true });
+    refreshVideos();
+  });
+  document.getElementById("seeAllBtn").addEventListener("click", () => openWorkspace());
+  document.getElementById("goUpload").addEventListener("click", () => openWorkspace("upload"));
+  document.getElementById("goSearch").addEventListener("click", () => openWorkspace("search"));
+  document.querySelectorAll("[data-open-library]").forEach(button => {
+    button.addEventListener("click", () => {
       showScreen("home", { focus: true });
-      if (refreshVideos) refreshVideos();
-      return;
-    }
-
-    // Modal is open -> let user interact with modal
-    if (state.workspace.shortcutsOpen || state.workspace.drawerOpen) return;
-
-    // Non-input shortcut handling
-    if (!isInputFocused) {
-      if (e.key === "/" || e.key === "s") {
-        e.preventDefault();
-        setTab("search");
-        searchPanel.focusInput();
-        return;
-      }
-
-      if (e.key === "?") {
-        e.preventDefault();
-        shortcutsModal.toggle();
-        return;
-      }
-
-      if (e.key >= "1" && e.key <= "5") {
-        const tabMap = ["search", "transcript", "chat", "chapters", "overview"];
-        const targetTab = tabMap[Number(e.key) - 1];
-        if (targetTab) {
-          e.preventDefault();
-          setTab(targetTab);
-        }
-        return;
-      }
-
-      // Video Controls
-      if (e.key === " " || e.key === "k" || e.key === "K") {
-        e.preventDefault();
-        player.togglePlay();
-        return;
-      }
-
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        player.seekRelative(-5);
-        return;
-      }
-
-      if (e.key === "ArrowRight") {
-        e.preventDefault();
-        player.seekRelative(5);
-        return;
-      }
-
-      if (e.key === "j" || e.key === "J") {
-        e.preventDefault();
-        player.seekRelative(-10);
-        return;
-      }
-
-      if (e.key === "l" || e.key === "L") {
-        e.preventDefault();
-        player.seekRelative(10);
-        return;
-      }
-
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        player.setVolume((state.player.volume || 1) + 0.1);
-        return;
-      }
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        player.setVolume((state.player.volume || 1) - 0.1);
-        return;
-      }
-
-      if (e.key === "m" || e.key === "M") {
-        e.preventDefault();
-        player.toggleMute();
-        return;
-      }
-
-      if (e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        player.toggleFullscreen();
-        return;
-      }
-    }
-  }
-
-  document.addEventListener("keydown", handleGlobalKeyDown);
-
-  // Global Workspace Listeners
-  if (emptyStateAddBtn) {
-    emptyStateAddBtn.addEventListener("click", () => ingestDrawer.open("file"));
-  }
-
-  document.querySelectorAll("[data-open-library]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      showScreen("home", { focus: true });
-      if (refreshVideos) refreshVideos();
+      refreshVideos();
     });
   });
-
-  const seeAllBtn = document.getElementById("seeAllBtn");
-  if (seeAllBtn) seeAllBtn.addEventListener("click", () => openWorkspace());
-  const goUpload = document.getElementById("goUpload");
-  if (goUpload) goUpload.addEventListener("click", () => openWorkspace("upload"));
-  const goSearch = document.getElementById("goSearch");
-  if (goSearch) goSearch.addEventListener("click", () => openWorkspace("search"));
 
   function reset() {
     stopJobPolling();
     state.workspace.scopedVideoId = null;
     state.workspace.scopedVideoTitle = null;
     state.workspace.selectedVideoId = null;
-    state.workspace.currentVideo = null;
-    state.workspace.job = null;
-    searchPanel.reset();
-    transcriptPanel.reset();
-    chatPanel.reset();
-    chaptersPanel.reset();
-    overviewPanel.reset();
-    ingestDrawer.reset();
-    shortcutsModal.close();
-    header.update({ video: null });
-    setViewMode("empty");
+    signalPath.hidden = true;
+    clearIngestError();
+    centerEmpty.hidden = false;
+    centerContent.classList.remove("show");
+    document.getElementById("centerTitle").textContent = "—";
+    document.getElementById("centerSummary").textContent = "";
+    document.getElementById("centerChapters").innerHTML = "";
+    document.getElementById("chaptersLabel").hidden = true;
+    document.getElementById("chaptersDivider").hidden = true;
+    setScope(null, null);
   }
 
   return {
     openWorkspace,
     openVideoInWorkspace,
     openSearchResultVideo,
+    showVideoInCenter,
+    showCenterForVideo,
     beginProcessing,
     startPollingJob,
     stopJobPolling,
     setScope,
-    setTab,
+    showIngestError,
+    clearIngestError,
     reset,
-    searchPanel,
-    chatPanel,
-    transcriptPanel,
-    chaptersPanel,
-    overviewPanel,
-    ingestDrawer,
   };
 }
