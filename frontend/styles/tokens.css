@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light;
+
+  /* Surfaces and text */
+  --canvas: #f4f6f3;
+  --surface: #ffffff;
+  --surface-soft: #fafbf9;
+  --surface-muted: #f0f3ef;
+  --border: #e1e7e2;
+  --border-strong: #cfd9d2;
+  --ink: #1a2923;
+  --ink-soft: #34463e;
+  --text-secondary: #586a61;
+  --text-muted: #647269;
+  --text-faint: #6a786f;
+
+  /* One restrained green accent; semantic colors are reserved for status. */
+  --accent: #176b58;
+  --accent-hover: #125746;
+  --accent-pressed: #0e493a;
+  --accent-soft: #e8f2ec;
+  --accent-border: #c8ddd1;
+  --success: #26734f;
+  --success-soft: #eaf4ed;
+  --warning: #8c5b18;
+  --warning-soft: #faf1e3;
+  --danger: #ad4545;
+  --danger-soft: #faeeee;
+  --info: #426d90;
+  --info-soft: #edf3f8;
+  --white: #ffffff;
+  --pine: #15372f;
+  --pine-deep: #102d27;
+
+  /* Type */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --text-display: clamp(2.5rem, 4.7vw, 4.5rem);
+  --text-h1: clamp(1.8rem, 2.6vw, 2.35rem);
+  --text-h2: 1.2rem;
+  --text-h3: 1rem;
+  --text-body: 0.94rem;
+  --text-small: 0.83rem;
+  --text-caption: 0.73rem;
+  --text-label: 0.72rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 1.75rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* Shape, elevation, and motion */
+  --radius-xs: 0.35rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.7rem;
+  --radius-lg: 0.9rem;
+  --radius-xl: 1.15rem;
+  --radius-pill: 999px;
+  --shadow-hairline: 0 1px 2px rgba(21, 45, 35, 0.04);
+  --shadow-panel: 0 12px 34px rgba(25, 43, 33, 0.045), 0 1px 2px rgba(25, 43, 33, 0.035);
+  --shadow-popover: 0 16px 42px rgba(19, 43, 34, 0.14);
+  --focus-ring: 0 0 0 3px rgba(23, 107, 88, 0.17);
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --duration-fast: 140ms;
+  --duration-ui: 190ms;
+}

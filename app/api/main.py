@@ -15,7 +15,7 @@ load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -437,32 +437,6 @@ def stop_live_session(session_id: str, current_user: User = Depends(get_current_
     return {"session_id": session_id, "status": "stopped"}
 
 
-# StaticFiles serves the root document and assets, but BrowserRouter routes need
-# their own index.html response on a direct visit or page refresh.
-def _serve_frontend_entry():
-    return FileResponse(BASE_DIR / "frontend" / "index.html", media_type="text/html")
-
-
-@app.get("/login", include_in_schema=False)
-def frontend_login():
-    return _serve_frontend_entry()
-
-
-@app.get("/signup", include_in_schema=False)
-def frontend_signup():
-    return _serve_frontend_entry()
-
-
-@app.get("/app", include_in_schema=False)
-def frontend_app():
-    return _serve_frontend_entry()
-
-
-@app.get("/app/{frontend_path:path}", include_in_schema=False)
-def frontend_app_path(frontend_path: str):
-    return _serve_frontend_entry()
-
-
 # MUST stay last: a "/" mount catches everything, so it has to be registered
-# after all API and SPA entry routes. Serves frontend/index.html and built assets.
+# after all API routes. Serves frontend/index.html at http://127.0.0.1:8000/
 app.mount("/", StaticFiles(directory=BASE_DIR / "frontend", html=True), name="frontend")
