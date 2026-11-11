@@ -12,6 +12,12 @@ __pycache__/
 build/
 dist/
 
+# --- JavaScript ---
+node_modules/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
 # --- Virtual environments ---
 venv/
 .venv/
