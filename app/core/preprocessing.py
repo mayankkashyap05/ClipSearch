@@ -1,92 +1,132 @@
-"""
-Pipeline stage: Preprocessing
-Extracts the audio track and periodic keyframes from a video using FFmpeg.
-These are the raw inputs for transcription (audio) and visual captioning
-(keyframes) later in the pipeline.
-
-Note on caching keys: this file, transcription.py, and diarization.py all
-cache their output under PROCESSED_DIR / video_stem / ..., derived from
-video_path.stem. This is safe from collisions because every caller (see
-app/workers/tasks.py) saves the local video file as "{video_id}{ext}"
-before passing it in -- so video_stem is always the video's UUID, never
-the user's original filename. Don't call these functions directly with an
-arbitrary user-named file path without being aware of this assumption.
-"""
+import json
 import subprocess
 from pathlib import Path
+
 from app.config import PROCESSED_DIR, KEYFRAME_INTERVAL_SECONDS
 
 
-def extract_audio(video_path: Path) -> Path:
-    """
-    Extract mono 16kHz WAV audio from the video.
-    This format (mono, 16kHz, 16-bit PCM) is Whisper's preferred input --
-    matching it exactly avoids implicit resampling before transcription.
-    """
+class MediaProcessingError(RuntimeError):
+    """ffmpeg/ffprobe problem; the message is readable enough to show in the UI."""
+
+
+def _run(cmd, what):
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except FileNotFoundError:
+        raise MediaProcessingError("ffmpeg is not installed or not on PATH.") from None
+    except subprocess.CalledProcessError as exc:
+        # Windows reports negative exit codes as unsigned 32-bit values
+        code = exc.returncode - 2**32 if exc.returncode > 2**31 else exc.returncode
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
+        tail = " | ".join(line.strip() for line in stderr.strip().splitlines()[-4:])
+        raise MediaProcessingError(
+            f"{what} failed (ffmpeg exit {code}): {tail or 'no details'}"
+        ) from exc
+
+
+def probe_media(path):
+    """Return {"has_audio", "has_video", "duration"}.
+    Values are None if ffprobe is unavailable or fails."""
+    unknown = {"has_audio": None, "has_video": None, "duration": None}
+    try:
+        res = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-print_format", "json",
+                "-show_streams", "-show_format",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        data = json.loads(res.stdout.decode("utf-8", errors="replace") or "{}")
+    except (FileNotFoundError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return unknown
+
+    streams = data.get("streams", [])
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    has_video = any(
+        s.get("codec_type") == "video"
+        and not (s.get("disposition") or {}).get("attached_pic")
+        for s in streams
+    )
+    try:
+        duration = float((data.get("format") or {}).get("duration"))
+    except (TypeError, ValueError):
+        duration = None
+
+    return {"has_audio": has_audio, "has_video": has_video, "duration": duration}
+
+
+def extract_audio(video_path):
+    """Extract 16 kHz mono WAV for Whisper. If the file has no audio stream,
+    write a silent WAV so the rest of the pipeline still completes."""
     video_path = Path(video_path)
-    out_dir = PROCESSED_DIR / video_path.stem
+    out_dir = Path(PROCESSED_DIR) / video_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
-    audio_path = out_dir / "audio.wav"
+    out_path = out_dir / "audio.wav"
 
-    cmd = [
-        "ffmpeg", "-y", "-i", str(video_path),
-        "-vn",                  # strip video stream, audio only
-        "-ac", "1",             # downmix to mono
-        "-ar", "16000",         # resample to 16kHz
-        "-acodec", "pcm_s16le", # uncompressed 16-bit PCM
-        str(audio_path),
-    ]
-    # capture_output=True suppresses ffmpeg's verbose stderr logging unless
-    # it actually fails (check=True raises CalledProcessError on non-zero exit).
-    subprocess.run(cmd, check=True, capture_output=True)
-    return audio_path
+    info = probe_media(video_path)
+
+    if info["has_audio"] is False:
+        _run(
+            [
+                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+                "-t", str(info["duration"] or 1.0),
+                "-acodec", "pcm_s16le",
+                str(out_path),
+            ],
+            "Silent audio generation",
+        )
+    else:
+        _run(
+            [
+                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(video_path),
+                "-map", "0:a:0",
+                "-vn", "-ac", "1", "-ar", "16000",
+                "-acodec", "pcm_s16le",
+                str(out_path),
+            ],
+            "Audio extraction",
+        )
+    return str(out_path)
 
 
-def extract_keyframes(video_path: Path, interval: int = KEYFRAME_INTERVAL_SECONDS) -> list[dict]:
-    """
-    Extract one JPEG frame every `interval` seconds for visual captioning.
-    Returns a list of {"timestamp": seconds, "path": Path} dicts, one per
-    extracted frame.
-
-    Note: "timestamp" is computed as index * interval rather than read from
-    the actual frame metadata. This assumes ffmpeg's fps filter samples
-    starting at 0s with no drift, which holds for standard video files.
-    """
+def extract_keyframes(video_path, interval=KEYFRAME_INTERVAL_SECONDS):
+    """Extract one JPEG every `interval` seconds.
+    Returns [{"timestamp": float, "path": str}, ...]; [] for audio-only media."""
     video_path = Path(video_path)
-    out_dir = PROCESSED_DIR / video_path.stem / "keyframes"
+
+    if probe_media(video_path)["has_video"] is False:
+        return []
+
+    out_dir = Path(PROCESSED_DIR) / video_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # %04d gives frame_0001.jpg, frame_0002.jpg, ... (sortable, up to 9999 frames)
-    pattern = str(out_dir / "frame_%04d.jpg")
-    cmd = [
-        "ffmpeg", "-y", "-i", str(video_path),
-        "-vf", f"fps=1/{interval}",  # sample 1 frame every `interval` seconds
-        "-q:v", "2",                  # high JPEG quality (2 = near-lossless, scale is 2-31)
-        pattern,
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    for old in out_dir.glob("frame_*.jpg"):
+        old.unlink(missing_ok=True)
 
-    # Glob + sort to get frames back in chronological order (string sort
-    # works here because %04d zero-pads consistently).
+    _run(
+        [
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(video_path),
+            "-vf", f"fps=1/{interval}",
+            "-q:v", "2",
+            str(out_dir / "frame_%04d.jpg"),
+        ],
+        "Keyframe extraction",
+    )
+
     frames = sorted(out_dir.glob("frame_*.jpg"))
-    keyframes = []
-    for i, frame_path in enumerate(frames):
-        keyframes.append({
-            "timestamp": i * interval,
-            "path": frame_path,
-        })
-    return keyframes
+    return [{"timestamp": i * interval, "path": str(p)} for i, p in enumerate(frames)]
 
 
 if __name__ == "__main__":
-    # Manual CLI usage for testing preprocessing in isolation:
-    #   python -m app.core.preprocessing path/to/video.mp4
     import sys
-    video = Path(sys.argv[1])
-    print(f"Extracting audio from {video}...")
-    audio_path = extract_audio(video)
-    print(f"  -> {audio_path}")
 
-    print(f"Extracting keyframes every {KEYFRAME_INTERVAL_SECONDS}s...")
-    kf = extract_keyframes(video)
-    print(f"  -> {len(kf)} keyframes in {kf[0]['path'].parent if kf else 'N/A'}")
+    target = sys.argv[1]
+    print(probe_media(target))
+    print(extract_audio(target))
+    print(len(extract_keyframes(target)), "keyframes")

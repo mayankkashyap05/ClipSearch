@@ -104,6 +104,7 @@ export function createPlayer() {
     if (/still being prepared/i.test(message)) return "The video file is still being prepared. Try again in a moment.";
     if (/not found|no longer/i.test(message)) return "This video is no longer available.";
     if (/Session expired/i.test(message)) return message;
+    if (/^https?:\/\//i.test(state.player.title)) return "This video is downloading. Please wait.";
     return "This video could not be played. Try reopening the video.";
   }
 
@@ -187,7 +188,13 @@ export function createPlayer() {
       return;
     }
     player.loadPromise = null;
-    setPlayerState("error", "This video could not be played. Try reopening the video.");
+    
+    let errorMessage = "This video could not be played. Try reopening the video.";
+    if (/^https?:\/\//i.test(player.title)) {
+      errorMessage = "This video is downloading. Please wait.";
+    }
+
+    setPlayerState("error", errorMessage);
   });
 
   return {

@@ -397,3 +397,39 @@
   .chat-heading { flex-direction: column; gap: var(--space-2); }
   .chat-context { max-width: 100%; }
 }
+
+/* ───────────── Live status line (pulse = "work is happening") ───────────── */
+.signal-meter { position: relative; }
+.signal-status { display: flex; min-height: 1.4rem; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); color: var(--ink-soft); font-size: var(--text-caption); }
+.signal-status[hidden] { display: none; }
+.signal-status-pulse { position: relative; width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 50%; background: var(--accent); }
+.signal-status-pulse::after { position: absolute; inset: 0; border-radius: inherit; background: var(--accent); content: ""; animation: status-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.signal-status-text { min-width: 0; font-weight: 620; }
+.signal-status-detail { min-width: 0; margin-left: auto; color: var(--text-muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; text-align: right; }
+@keyframes status-ping { 0% { opacity: 0.55; transform: scale(1); } 80%, 100% { opacity: 0; transform: scale(2.8); } }
+
+/* Indeterminate meter: connecting / merging / unknown total size */
+.signal-path[data-waiting="true"] .signal-meter span { width: 38%; animation: meter-slide 1.5s ease-in-out infinite; }
+@keyframes meter-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(265%); } }
+
+/* ───────────── "Video isn't ready yet" placeholder (replaces the player) ───────────── */
+.media-pending { display: flex; width: 100%; max-height: 72dvh; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-6); aspect-ratio: 16 / 9; background: #0f1815; color: rgba(255, 255, 255, 0.78); font-size: var(--text-small); text-align: center; }
+.media-pending[hidden] { display: none; }
+.media-pending strong { color: #fff; font-weight: 650; }
+.media-pending-orb { width: 2.4rem; height: 2.4rem; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #8ebba6, #2f7a63); animation: orb-pulse 1.8s ease-in-out infinite; }
+@keyframes orb-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(0.88); box-shadow: 0 0 0 0 rgba(142, 187, 166, 0.35); }
+  50% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 14px rgba(142, 187, 166, 0); }
+}
+.media-pending[data-state="failed"] { color: #f2d2d2; }
+.media-pending[data-state="failed"] .media-pending-orb { display: grid; place-items: center; background: #7a3636; animation: none; color: #fff; font-weight: 750; }
+.media-pending[data-state="failed"] .media-pending-orb::after { content: "!"; }
+
+/* Invalid URL field */
+.upload-form input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .signal-status-pulse::after,
+  .media-pending-orb,
+  .signal-path[data-waiting="true"] .signal-meter span { animation: none; }
+}

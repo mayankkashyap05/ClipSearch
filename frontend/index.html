@@ -61,6 +61,9 @@
     <symbol id="icon-close" viewBox="0 0 20 20">
       <path d="m5 5 10 10M15 5 5 15" />
     </symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24">
+      <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </symbol>
     <symbol id="icon-chevron" viewBox="0 0 20 20">
       <path d="m5 7.5 5 5 5-5" />
     </symbol>
@@ -281,7 +284,7 @@
                     <div class="field">
                       <label class="field-label" for="videoUrl">Video URL</label>
                       <input type="url" id="videoUrl" name="url" placeholder="https://…" autocomplete="url" />
-                      <span class="field-help">Paste a video URL to process it from its source.</span>
+                      <span class="field-help">Paste a YouTube link or any video URL to process it from its source.</span>
                     </div>
                     <button class="btn btn-primary" id="submitVideo" type="submit"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span>Start processing</span></button>
                   </form>
@@ -291,9 +294,17 @@
 
             <div class="workspace-status">
               <div class="ingest-error" id="ingestError" role="alert" aria-live="polite"></div>
-              <div class="signal-path" id="signalPath" hidden aria-live="polite">
-                <div class="signal-header"><h3 class="signal-heading">Processing progress</h3><span class="signal-caption">Your video will be searchable when indexing is complete.</span></div>
+              <div class="signal-path" id="signalPath" hidden data-state="running" data-waiting="false">
+                <div class="signal-header">
+                  <h3 class="signal-heading">Processing progress</h3>
+                  <span class="signal-caption">Your video will be searchable when indexing is complete.</span>
+                </div>
                 <div class="signal-meter" aria-hidden="true"><span></span></div>
+                <div class="signal-status" id="signalStatus" hidden>
+                  <span class="signal-status-pulse" aria-hidden="true"></span>
+                  <span class="signal-status-text" id="signalStatusText" role="status"></span>
+                  <span class="signal-status-detail" id="signalStatusDetail" aria-hidden="true"></span>
+                </div>
                 <div class="signal-steps" id="signalSteps"></div>
               </div>
             </div>
@@ -315,6 +326,11 @@
                   </div>
                 </div>
                 <div class="center-content" id="centerContent">
+                  <div class="media-pending" id="mediaPending" hidden data-state="loading">
+                    <span class="media-pending-orb" aria-hidden="true"></span>
+                    <strong id="mediaPendingTitle">Getting your video ready…</strong>
+                    <span id="mediaPendingText"></span>
+                  </div>
                   <div class="player-shell" id="playerShell" data-state="idle">
                     <div class="player-frame">
                       <video id="videoPlayer" controls playsinline preload="metadata" aria-label="Selected video player"></video>

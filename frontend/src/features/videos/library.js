@@ -1,6 +1,6 @@
 import { api } from "../../services/api.js";
 import { state } from "../../state/app-state.js";
-import { setConnectionStatus } from "../../components/feedback.js";
+import { setConnectionStatus, showToast } from "../../components/feedback.js";
 import { showScreen } from "../../components/navigation.js";
 import { escapeHtml, formatCreatedAt, videoStatus, videoStatusLabel } from "../../utils/format.js";
 
@@ -84,11 +84,14 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
       const subline = [stage && status !== "completed" ? stage : "", created].filter(Boolean).join(" · ");
       const title = video.filename || video.video_id || "Untitled video";
       return `
-        <button class="video-row" type="button" data-video-id="${escapeHtml(video.video_id)}" aria-label="Open ${escapeHtml(title)}">
+        <div class="video-row" tabindex="0" role="button" data-video-id="${escapeHtml(video.video_id)}" aria-label="Open ${escapeHtml(title)}" style="cursor: pointer;">
           <span class="video-thumb" aria-hidden="true">${VIDEO_ICON}</span>
           <span class="video-meta"><span class="video-title">${escapeHtml(title)}</span><span class="video-sub">${escapeHtml(subline || "Added to your library")}</span></span>
           <span class="status-pill ${status}">${videoStatusLabel(status)}</span>
-        </button>`;
+          <button type="button" class="icon-btn" data-delete-video="${escapeHtml(video.video_id)}" aria-label="Delete video" title="Delete video" style="margin-left: 0.5rem; flex: 0 0 auto;">
+            <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+          </button>
+        </div>`;
     }).join("");
   }
 
@@ -133,7 +136,17 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
     return video || null;
   }
 
-  list.addEventListener("click", event => {
+  list.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      const row = event.target.closest(".video-row");
+      if (row && event.target === row) {
+        event.preventDefault();
+        row.click();
+      }
+    }
+  });
+
+  list.addEventListener("click", async event => {
     const retry = event.target.closest("[data-retry-videos]");
     if (retry) {
       refreshVideos();
@@ -144,6 +157,29 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
       openWorkspace("upload");
       return;
     }
+    
+    // Intercept the delete button click
+    const delBtn = event.target.closest("[data-delete-video]");
+    if (delBtn) {
+      event.stopPropagation();
+      const videoId = delBtn.dataset.deleteVideo;
+      if (confirm("Are you sure you want to delete this video? This cannot be undone.")) {
+        try {
+          await api.deleteVideo(videoId);
+          showToast("success", "Video deleted.");
+          
+          // Let the workspace know so it can close the video if it's currently open
+          if (state.workspace.selectedVideoId === videoId) {
+            window.dispatchEvent(new CustomEvent("videoDeleted", { detail: { videoId } }));
+          }
+          refreshVideos();
+        } catch (err) {
+          showToast("error", err.message || "Failed to delete video.");
+        }
+      }
+      return;
+    }
+
     const row = event.target.closest("[data-video-id]");
     if (row) {
       const video = state.library.items.find(item => item.video_id === row.dataset.videoId);

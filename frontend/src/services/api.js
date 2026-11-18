@@ -1,6 +1,6 @@
 /*
- * Browser-only transport layer. Endpoint paths, HTTP methods, query names,
- * payload keys, auth headers, and playback-token URLs mirror app/api/main.py.
+- Browser-only transport layer. Endpoint paths, HTTP methods, query names,
+- payload keys, auth headers, and playback-token URLs mirror app/api/main.py.
  */
 let getApiBase = () => window.location.origin;
 let getAccessToken = () => null;
@@ -18,6 +18,22 @@ export function apiUrl(path) {
   return base + path;
 }
 
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+// FastAPI sends a string for HTTPException, but a list of {msg, ...} for 422s.
+function detailToMessage(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map(item => item && item.msg).filter(Boolean);
+    if (messages.length) return messages.join("; ");
+  }
+  return null;
+}
+
 async function request(path, options = {}) {
   const { auth = true, ...fetchOptions } = options;
   const headers = new Headers(fetchOptions.headers || {});
@@ -27,18 +43,19 @@ async function request(path, options = {}) {
   const response = await fetch(apiUrl(path), { ...fetchOptions, headers });
   if (response.status === 401 && auth) {
     onUnauthorized();
-    throw new Error("Session expired. Please sign in again.");
+    throw httpError("Session expired. Please sign in again.", 401);
   }
 
   if (!response.ok) {
     let detail = response.statusText;
     try {
       const body = await response.clone().json();
-      if (body && body.detail) detail = body.detail;
+      const parsed = body && detailToMessage(body.detail);
+      if (parsed) detail = parsed;
     } catch (_error) {
       // Retain the HTTP status message for non-JSON error responses.
     }
-    throw new Error(detail || `Request failed (${response.status})`);
+    throw httpError(detail || `Request failed (${response.status})`, response.status);
   }
   return response;
 }
@@ -68,6 +85,10 @@ export const api = {
 
   listVideos() {
     return requestJson("/videos");
+  },
+
+  deleteVideo(videoId) {
+    return requestJson("/videos/" + encodeURIComponent(videoId), { method: "DELETE" });
   },
 
   getJob(jobId) {

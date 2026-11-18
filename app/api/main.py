@@ -8,6 +8,7 @@ Run with a single process (embedded Qdrant locks its data folder):
 import re
 import uuid
 import mimetypes
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 from dotenv import load_dotenv
@@ -20,12 +21,16 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from app.config import TEMP_DIR, BASE_DIR
+from app.config import TEMP_DIR, BASE_DIR, PROCESSED_DIR
 from app.core.video_chat import ask_about_video
 from app.db.database import get_db, engine, Base
 from app.db.models import Video, ProcessingJob, JobStatus, User
 from app.storage.s3_storage import upload_file, get_file_size, iter_file_range
-from app.workers.tasks import process_video_task, process_video_from_url_task
+from app.workers.tasks import (
+    process_video_task, process_video_from_url_task,
+    get_download_progress, fail_interrupted_jobs,
+)
+from app.core.url_download import validate_video_url, VideoDownloadError
 from app.core.qdrant_indexing import search as qdrant_search
 from app.auth.users import (
     hash_password, verify_password, create_access_token, get_current_user,
@@ -34,6 +39,7 @@ from app.auth.users import (
 from app.core.live_sessions import start_session, get_session, stop_session, list_sessions
 
 Base.metadata.create_all(bind=engine)
+fail_interrupted_jobs()
 
 app = FastAPI(title="Video Search API", version="1.0")
 
@@ -130,6 +136,11 @@ def upload_video_from_url(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    try:
+        url = validate_video_url(url)
+    except VideoDownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     video_id = str(uuid.uuid4())
 
     video = Video(id=video_id, owner_id=current_user.id, filename=url, storage_key="pending")
@@ -304,11 +315,13 @@ def get_job_status(
     return {
         "job_id": job.id,
         "video_id": job.video_id,
+        "filename": job.video.filename if job.video else None,   # real title once known
         "status": job.status,
         "current_stage": job.current_stage,
         "error_message": job.error_message,
         "summary": job.summary,
         "chapters": job.chapters_json,
+        "download": get_download_progress(job.id),                # None unless a URL job is downloading
     }
 
 
@@ -369,6 +382,51 @@ def list_videos(
         })
 
     return {"videos": results, "count": len(results)}
+
+
+@app.delete("/videos/{video_id}")
+def delete_video(
+    video_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    video = _get_owned_video_or_404(db, video_id, current_user)
+    
+    # 1. Delete from DB (ProcessingJobs will cascade and be deleted automatically)
+    db.delete(video)
+    db.commit()
+
+    # 2. Clean up the raw file from local storage
+    if video.storage_key and video.storage_key != "pending":
+        try:
+            from app.storage.s3_storage import _resolve
+            path = _resolve(video.storage_key)
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
+    # 3. Clean up the processed assets (audio, keyframes, transcripts)
+    shutil.rmtree(PROCESSED_DIR / video_id, ignore_errors=True)
+
+    # 4. Clean up Qdrant semantic search points
+    try:
+        from app.core.qdrant_indexing import _get_client, COLLECTION_NAME
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        client = _get_client()
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(key="video_id", match=MatchValue(value=video_id)),
+                    FieldCondition(key="owner_id", match=MatchValue(value=current_user.id))
+                ]
+            )
+        )
+    except Exception as e:
+        print(f"Failed to delete Qdrant points for {video_id}: {e}")
+
+    return {"status": "deleted"}
 
 
 class LiveStartRequest(BaseModel):
