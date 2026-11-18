@@ -48,7 +48,6 @@ Thumbs.db
 celerybeat-schedule
 celerybeat.pid
 
-run.bat
 CODE.md
 codebase.yaml
 codebase.py

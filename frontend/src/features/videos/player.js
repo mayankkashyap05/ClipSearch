@@ -4,13 +4,24 @@ import { formatTime } from "../../utils/format.js";
 
 const PLAYBACK_TOKEN_REFRESH_MS = 45 * 60 * 1000; // Backend playback tokens expire after 60 minutes.
 
-export function createPlayer() {
+// Safety net: if a stream still isn't available, retry a few times instead of dead-ending.
+const AUTO_RETRY_LIMIT = 3;
+const AUTO_RETRY_DELAY_MS = 2500; // multiplied by the attempt number (2.5s, 5s, 7.5s)
+const RECOVERABLE_LOAD_ERROR = /still being prepared|could not be loaded/i;
+
+/**
+ * @param {{ canLoad?: (videoId: string) => boolean }} [options]
+ *   canLoad is a readiness gate. While it returns false for a video, the player will
+ *   not request a playback token or touch the <video> element for that video.
+ */
+export function createPlayer({ canLoad = () => true } = {}) {
   const video = document.getElementById("videoPlayer");
   const shell = document.getElementById("playerShell");
   const status = document.getElementById("playerStatus");
   const overlayText = document.getElementById("playerOverlayText");
   const resumeButton = document.getElementById("playerResume");
   let onPlayheadChange = () => {};
+  let retryTimer = null;
 
   function setPlayerState(name, message) {
     shell.dataset.state = name;
@@ -48,8 +59,33 @@ export function createPlayer() {
     });
   }
 
+  function cancelAutoRetry() {
+    if (retryTimer) window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+
+  /** Schedules a fresh load of the same video. Returns false when retries are exhausted. */
+  function scheduleAutoRetry(videoId, title, resumeAt = 0) {
+    const player = state.player;
+    if (player.autoRetries >= AUTO_RETRY_LIMIT) return false;
+    player.autoRetries += 1;
+    setPlayerState("loading", "Still preparing your video… retrying");
+    cancelAutoRetry();
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      if (state.player.videoId !== videoId || !canLoad(videoId)) return;
+      state.player.loadPromise = null;
+      state.player.tokenIssuedAt = 0;
+      loadVideo(videoId, title)
+        .then(() => { if (resumeAt > 0) video.currentTime = resumeAt; })
+        .catch(() => {});
+    }, AUTO_RETRY_DELAY_MS * player.autoRetries);
+    return true;
+  }
+
   function reset() {
     const player = state.player;
+    cancelAutoRetry();
     player.seekRequestId += 1;
     player.videoId = null;
     player.title = null;
@@ -57,6 +93,7 @@ export function createPlayer() {
     player.tokenIssuedAt = 0;
     player.loadPromise = null;
     player.retried = false;
+    player.autoRetries = 0;
     player.jumpedAt = 0;
     video.pause();
     video.removeAttribute("src");
@@ -67,9 +104,19 @@ export function createPlayer() {
 
   function loadVideo(videoId, title) {
     const player = state.player;
+
+    // Readiness gate: never fetch a token / set a src for media that isn't finished.
+    if (!canLoad(videoId)) {
+      return Promise.reject(new Error("The video file is still being prepared."));
+    }
+
     const tokenIsFresh = Date.now() - player.tokenIssuedAt < PLAYBACK_TOKEN_REFRESH_MS;
     if (player.videoId === videoId && player.loadPromise && tokenIsFresh) return player.loadPromise;
 
+    if (player.videoId !== videoId) {
+      player.autoRetries = 0;
+      cancelAutoRetry();
+    }
     player.videoId = videoId;
     player.title = title || videoTitleFor(videoId) || "video";
     player.retried = false;
@@ -85,6 +132,7 @@ export function createPlayer() {
       video.load();
       await waitForMetadata(video);
       if (player.videoId !== videoId || player.loadPromise !== promise) throw new Error("superseded");
+      player.autoRetries = 0;
       setPlayerState("ready", "Ready · " + formatTime(video.duration));
     })();
 
@@ -93,6 +141,7 @@ export function createPlayer() {
       if (error.message === "superseded") return;
       if (player.loadPromise === promise) {
         player.loadPromise = null;
+        if (RECOVERABLE_LOAD_ERROR.test(error.message || "") && scheduleAutoRetry(videoId, title)) return;
         setPlayerState("error", friendlyPlaybackError(error));
       }
     });
@@ -179,22 +228,29 @@ export function createPlayer() {
   video.addEventListener("error", () => {
     const player = state.player;
     if (!player.videoId || !video.getAttribute("src")) return;
+
+    // The video's media is not ready (job still running). An error here is expected and
+    // must not surface as a playback failure: release the element and stay on the loader.
+    if (!canLoad(player.videoId)) {
+      reset();
+      return;
+    }
+
+    const resumeAt = video.currentTime;
+
     // Refresh an old video-bound token once, preserving the current playhead.
     if (!player.retried && Date.now() - player.tokenIssuedAt > PLAYBACK_TOKEN_REFRESH_MS) {
-      const resumeAt = video.currentTime;
       player.retried = true;
       player.tokenIssuedAt = 0;
       loadVideo(player.videoId, player.title).then(() => { video.currentTime = resumeAt; }).catch(() => {});
       return;
     }
     player.loadPromise = null;
-    
-    let errorMessage = "This video could not be played. Try reopening the video.";
-    if (/^https?:\/\//i.test(player.title)) {
-      errorMessage = "This video is downloading. Please wait.";
-    }
 
-    setPlayerState("error", errorMessage);
+    // Otherwise retry a few times before giving up, so a briefly locked file recovers by itself.
+    if (scheduleAutoRetry(player.videoId, player.title, resumeAt)) return;
+
+    setPlayerState("error", friendlyPlaybackError(new Error("")));
   });
 
   return {

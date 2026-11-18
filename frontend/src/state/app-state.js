@@ -18,6 +18,9 @@ export const state = {
     scopedVideoId: null,
     scopedVideoTitle: null,
     selectedVideoId: null,
+    // True while the selected video's media is not ready (job still running, or the
+    // download failed). The player must not request a stream while this is set.
+    mediaDeferred: false,
     jobPollTimer: null,
     activeJobId: null,
     searchResults: [],
@@ -32,6 +35,7 @@ export const state = {
     loadPromise: null,
     seekRequestId: 0,
     retried: false,
+    autoRetries: 0,
     jumpedAt: 0,
   },
   chat: { pending: false, requestId: 0 },

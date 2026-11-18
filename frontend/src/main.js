@@ -17,7 +17,10 @@ configureApi({
   unauthorized: () => authFeature && authFeature.signOut(false),
 });
 
-const player = createPlayer();
+// The player may never request a stream for a video whose media is still being produced.
+const player = createPlayer({
+  canLoad: videoId => !(state.workspace.mediaDeferred && state.workspace.selectedVideoId === videoId),
+});
 const chat = createChatFeature({ player });
 let library;
 const workspace = createWorkspaceFeature({

@@ -3,7 +3,7 @@ Local LLM client (no API key, no paid service).
 
 Talks to any OpenAI-compatible endpoint. Default is Ollama running on your
 own machine (https://ollama.com), which is free and fully offline:
-    ollama pull llama3.2:3b
+    ollama pull llama3.2:1b
 Override with LLM_BASE_URL / LLM_MODEL / LLM_API_KEY in .env if you ever
 want a different server.
 """
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LLM_BASE_URL = (os.environ.get("LLM_BASE_URL") or "http://localhost:11434/v1").rstrip("/")
-LLM_MODEL = os.environ.get("LLM_MODEL") or "llama3.2:3b"
+LLM_MODEL = os.environ.get("LLM_MODEL") or "llama3.2:1b"
 LLM_API_KEY = os.environ.get("LLM_API_KEY") or ""
 
 

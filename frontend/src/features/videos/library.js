@@ -88,7 +88,7 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
           <span class="video-thumb" aria-hidden="true">${VIDEO_ICON}</span>
           <span class="video-meta"><span class="video-title">${escapeHtml(title)}</span><span class="video-sub">${escapeHtml(subline || "Added to your library")}</span></span>
           <span class="status-pill ${status}">${videoStatusLabel(status)}</span>
-          <button type="button" class="icon-btn" data-delete-video="${escapeHtml(video.video_id)}" aria-label="Delete video" title="Delete video" style="margin-left: 0.5rem; flex: 0 0 auto;">
+          <button type="button" class="btn btn-danger-quiet" data-delete-video="${escapeHtml(video.video_id)}" aria-label="Delete video" title="Delete video" style="margin-left: 0.75rem; flex: 0 0 auto; min-height: 2.2rem; padding: 0 0.6rem;">
             <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
           </button>
         </div>`;

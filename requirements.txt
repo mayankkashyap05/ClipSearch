@@ -1,29 +1,31 @@
 # Core API
-fastapi
-uvicorn
-python-multipart
-python-dotenv
-requests
-SQLAlchemy>=2.0
+fastapi==0.162.4
+uvicorn==0.54.0
+pydantic>=2.0
+python-multipart==0.0.33
+python-dotenv==1.2.4
+requests==2.34.2
+SQLAlchemy==2.1.8
 
 # Auth (bcrypt pinned: passlib 1.7.4 breaks with bcrypt>=4.1)
-PyJWT
+PyJWT==2.15.1
 passlib==1.7.4
 bcrypt==4.0.1
 
 # Video / ML pipeline
-yt-dlp
-openai-whisper
-torch
-transformers
-pillow
-numpy
+yt-dlp[default]>=2026.10.26
+openai-whisper==20250625
+torch>=2.15.0,<3.0.0
+transformers==5.22.2
+safetensors
+pillow==13.0.0
+numpy==2.5.4
 # soundfile        # optional: only used with pyannote
 # pyannote.audio   # optional: speaker labels (needs free HF_TOKEN)
-sentence-transformers
+sentence-transformers==6.2.0
 
 # Embedded vector DB (local mode, no server)
-qdrant-client
+qdrant-client==1.20.0
 
 # Tests (optional)
 pytest

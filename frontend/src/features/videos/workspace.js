@@ -23,9 +23,7 @@ const STAGE_ACTIVITY = {
   summarizing: "Writing the summary and chapters…",
   indexing: "Indexing everything for search…",
 };
-const PROCESSING_STAGES = new Set(["pending", "processing"]);
-// While a job is in one of these stages the media file may not exist yet.
-const MEDIA_PENDING_STAGES = new Set(["pending", "downloading"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed"]);
 
 // Polling. There is deliberately NO overall timeout: a job keeps being tracked
 // until the server reports completed/failed. Only repeated network errors stop it.
@@ -38,6 +36,29 @@ const SLOW_DOWNLOAD_HINT_MS = 90 * 1000;
 const DEFAULT_CAPTION = "Your video will be searchable when indexing is complete.";
 const URL_DOWNLOAD_CAPTION = "Fetching your video from its source. Long videos can take a few minutes.";
 const SLOW_DOWNLOAD_CAPTION = "Still downloading. Large videos can take several minutes. Keep this tab open and we'll continue automatically.";
+
+function normalize(value) {
+  return String(value || "").toLowerCase();
+}
+
+/** A job is "active" unless the server has said it is completed or failed. (Blacklist, not whitelist.) */
+function isJobActive(status) {
+  return !TERMINAL_STATUSES.has(normalize(status));
+}
+
+/**
+ * Single source of truth for "may the <video> player be mounted yet?"
+ *  - completed                      -> yes
+ *  - failed after the download step -> yes (the file exists)
+ *  - failed during download         -> no (media missing; show the failed placeholder)
+ *  - anything else (pending, processing, unknown, in-flight) -> no
+ */
+function shouldDeferPlayer(status, stage) {
+  const value = normalize(status);
+  if (value === "completed") return false;
+  if (value === "failed") return normalize(stage) === "downloading";
+  return true;
+}
 
 function setText(element, text) {
   // Only touch the DOM when text changes (avoids needless screen-reader chatter).
@@ -85,18 +106,18 @@ function describeDownloadProgress(download, elapsedText) {
   return parts.join(" · ");
 }
 
-function placeholderConfig({ failed = false, fromUrl = false } = {}) {
+function placeholderConfig({ failed = false } = {}) {
   if (failed) {
     return {
       state: "failed",
-      title: "Couldn’t fetch this video",
-      text: "The download didn’t finish. See the details below.",
+      title: "Processing failed",
+      text: "We couldn't process this video. See the details below.",
     };
   }
   return {
     state: "loading",
-    title: fromUrl ? "Fetching your video from its source…" : "Getting your video ready…",
-    text: "The player will appear as soon as the file is available.",
+    title: "Getting your video ready…",
+    text: "Your video will appear here as soon as processing is complete.",
   };
 }
 
@@ -114,15 +135,31 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   const mediaPendingTitle = document.getElementById("mediaPendingTitle");
   const mediaPendingText = document.getElementById("mediaPendingText");
   const playerShell = document.getElementById("playerShell");
-  const videoPlayer = document.getElementById("videoPlayer");
+  const workspaceDeleteBtn = document.getElementById("workspaceDeleteBtn");
 
   let lastStepsKey = null;
   let pollNow = null;
 
-  // Add this listener to close the active workspace session if deleted
+  // Handles closing the active workspace session if deleted from the library view
   window.addEventListener("videoDeleted", event => {
     if (state.workspace.selectedVideoId === event.detail.videoId) {
       reset();
+    }
+  });
+
+  // Handle direct deletion from the active Workspace view
+  workspaceDeleteBtn.addEventListener("click", async () => {
+    const videoId = state.workspace.selectedVideoId;
+    if (!videoId) return;
+    if (confirm("Are you sure you want to delete this video? This cannot be undone.")) {
+      try {
+        await api.deleteVideo(videoId);
+        showToast("success", "Video deleted.");
+        refreshVideos();
+        reset();
+      } catch (err) {
+        showToast("error", err.message || "Failed to delete video.");
+      }
     }
   });
 
@@ -172,8 +209,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   // ───────────── Signal path (progress UI) ─────────────
 
   function renderSignalSteps(currentStage, failed, completed) {
-    // Only rebuild when something structural changes; rebuilding every poll
-    // would restart the pulse animation and flicker.
     const key = `${currentStage}|${failed}|${completed}`;
     if (key === lastStepsKey) return;
     lastStepsKey = key;
@@ -231,7 +266,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     });
   }
 
-  /** Turn a /jobs/{id} payload into everything the signal path needs to show. */
   function describeJob(job, run) {
     const failed = job.status === "failed";
     const completed = job.status === "completed";
@@ -274,7 +308,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
       return view;
     }
 
-    // ── Downloading stage ──
     const download = job.download || null;
     if (!download && !run.isUrlSource) {
       view.waiting = true;
@@ -284,7 +317,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     }
 
     view.caption = URL_DOWNLOAD_CAPTION;
-    // No `download` object while we know it's a URL job = the brief gap between saving and the next stage.
     const phase = download ? download.phase : "saving";
     switch (phase) {
       case "downloading": {
@@ -313,7 +345,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
         view.statusText = "Saving the video to your library…";
         view.statusDetail = `${elapsed} elapsed`;
         break;
-      default: // "starting"
+      default:
         view.waiting = true;
         view.stepLabel = "Connecting…";
         view.statusText = "Contacting the video source…";
@@ -322,7 +354,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     return view;
   }
 
-  // ───────────── Media placeholder (no player until the file exists) ─────────────
+  // ───────────── Media placeholder / player gate ─────────────
 
   function setMediaPlaceholder(config) {
     if (!mediaPending) return;
@@ -338,17 +370,20 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     if (playerShell) playerShell.hidden = true;
   }
 
-  function pausePlayback() {
-    // A previously selected video must not keep playing behind the placeholder.
-    if (videoPlayer && typeof videoPlayer.pause === "function") videoPlayer.pause();
+  /**
+   * Keep the "Getting your video ready…" screen up and make sure the player is completely
+   * idle: gate closed (no stream requests), any stale <video src> released, retries cancelled.
+   */
+  function deferMedia(failed) {
+    state.workspace.mediaDeferred = true;
+    player.reset();
+    setMediaPlaceholder(placeholderConfig({ failed }));
   }
 
-  function releaseDeferredPlayer(run) {
-    run.playerDeferred = false;
+  /** Processing is finished: open the gate and show the player shell. */
+  function releaseMedia() {
+    state.workspace.mediaDeferred = false;
     setMediaPlaceholder(null);
-    if (state.workspace.selectedVideoId === run.videoId && state.ui.screen === "workspace") {
-      player.ensureVideoLoaded({ ...run.video, video_id: run.videoId, filename: run.title });
-    }
   }
 
   // ───────────── Polling ─────────────
@@ -365,7 +400,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   }
 
   function adoptServerTitle(job, run) {
-    // The backend swaps the raw URL for the video's real title once it knows it.
     if (!job.filename || job.filename === run.title) return;
     run.title = job.filename;
     if (state.workspace.selectedVideoId === run.videoId) {
@@ -374,7 +408,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     if (state.workspace.scopedVideoId === run.videoId) setScope(run.videoId, run.title);
   }
 
-  /** Returns true when the job reached a terminal state (stop polling). */
   function handleJobUpdate(job, run) {
     const failed = job.status === "failed";
     const completed = job.status === "completed";
@@ -389,45 +422,49 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     adoptServerTitle(job, run);
     paintSignal(describeJob(job, run));
 
+    const selected = state.workspace.selectedVideoId === run.videoId;
+
     if (!failed && !completed) {
-      if (run.playerDeferred) {
-        if (MEDIA_PENDING_STAGES.has(stageKey)) {
-          setMediaPlaceholder(placeholderConfig({ fromUrl: run.isUrlSource }));
-        } else {
-          releaseDeferredPlayer(run); // file is stored; the player can load it now
-        }
-      }
-      return false;
+      // Still running (including every downloading step): the loader stays up, the player stays idle.
+      if (selected && !state.workspace.mediaDeferred) deferMedia(false);
+      return false; // Keep polling
     }
 
+    // Processing has finished or failed.
     refreshVideos();
-    const viewing = state.workspace.selectedVideoId === run.videoId && state.ui.screen === "workspace";
-    const downloadFailed = failed && run.isUrlSource && MEDIA_PENDING_STAGES.has(stageKey);
+    const onWorkspace = state.ui.screen === "workspace";
+    const mediaMissing = failed && shouldDeferPlayer("failed", stageKey);
 
-    if (viewing) {
+    // Repaint the center whenever this video is the selected one — even if the user is
+    // currently on another screen — so returning to the workspace never shows a stale loader.
+    if (selected) {
       showCenterForVideo({
-        video_id: job.video_id,
-        filename: run.title || job.video_id,
+        video_id: job.video_id || run.videoId,
+        filename: run.title || job.video_id || run.videoId,
         summary: job.summary,
         chapters: job.chapters,
         status: job.status,
+        current_stage: stageKey,
         error_message: job.error_message,
-        defer_player: downloadFailed, // no media exists, so don't try to play it
+        defer_player: mediaMissing,
         from_url: run.isUrlSource,
       });
       if (failed) {
-        const prefix = downloadFailed ? "Download failed: " : "Processing failed: ";
+        const prefix = mediaMissing ? "Download failed: " : "Processing failed: ";
         showIngestError(job.error_message
           ? prefix + job.error_message
-          : downloadFailed
+          : mediaMissing
             ? "Download failed. Check the link and try again."
             : "Processing failed. You can try adding the video again.");
       } else {
         clearIngestError();
-        showToast("success", "Your video is indexed and ready to search.");
       }
-    } else if (failed) {
-      showToast("error", downloadFailed ? "A video download failed." : "Video processing failed.");
+    }
+
+    if (completed) {
+      showToast("success", "Your video is indexed and ready to search.");
+    } else if (!selected || !onWorkspace) {
+      showToast("error", mediaMissing ? "A video download failed." : "Video processing failed.");
     }
     return true;
   }
@@ -481,8 +518,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
               : "We lost contact with the server. The job may still be running. Reopen the video from your library to resume tracking it.");
           }
         } else {
-          // Transient failure (wifi blip, laptop sleep, server busy): stay on the
-          // loading screen and retry with backoff instead of giving up.
           nextDelay = Math.min(POLL_NORMAL_MS * 1.5 ** run.errors, POLL_RETRY_MAX_MS);
           signalStatus.hidden = false;
           setText(signalStatusText, "Connection interrupted. Retrying…");
@@ -503,7 +538,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     poll();
   }
 
-  // Browsers throttle timers in background tabs; catch up the moment the tab is visible again.
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && pollNow) pollNow();
   });
@@ -519,7 +553,8 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
       video_id: videoId,
       filename: title,
       status: "processing",
-      defer_player: fromUrl,   // URL videos have no file until the download finishes
+      current_stage: "downloading",
+      defer_player: true, // Always hide player until completely finished processing
       from_url: fromUrl,
       summary: fromUrl
         ? "Fetching your video from its source. Your summary and chapters will appear here once it’s processed."
@@ -528,7 +563,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     signalPath.scrollIntoView({ block: "nearest", behavior: "smooth" });
     startPollingJob(jobId, videoId, title, {
       source: options.source,
-      deferPlayer: fromUrl,
+      deferPlayer: true,
       video: { video_id: videoId, filename: title, current_stage: "downloading" },
     });
   }
@@ -549,23 +584,21 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   function showVideoInCenter(video) {
     if (!video || !video.video_id) return;
     state.workspace.selectedVideoId = video.video_id;
-    if (video.job_id) {
-      const status = String(video.status || "").toLowerCase();
-      const stage = String(video.current_stage || "").toLowerCase();
-      const processing = PROCESSING_STAGES.has(status);
-      const waitingForMedia = processing && (!stage || MEDIA_PENDING_STAGES.has(stage));
-      const mediaMissing = status === "failed" && stage === "downloading";
 
-      showCenterForVideo({ ...video, defer_player: waitingForMedia || mediaMissing });
-      if (processing) {
-        startPollingJob(video.job_id, video.video_id, video.filename, { video, deferPlayer: waitingForMedia });
-      } else {
-        stopJobPolling();
-        loadFinalJobDetails(video);
-      }
-    } else {
+    if (!video.job_id) {
       centerEmpty.hidden = false;
       centerContent.classList.remove("show");
+      return;
+    }
+
+    if (isJobActive(video.status)) {
+      // Anything that is not completed/failed is still in flight: loader + polling, no player.
+      showCenterForVideo({ ...video, defer_player: true });
+      startPollingJob(video.job_id, video.video_id, video.filename, { video, deferPlayer: true });
+    } else {
+      stopJobPolling();
+      showCenterForVideo({ ...video }); // shouldDeferPlayer() decides (completed → player, failed download → placeholder)
+      loadFinalJobDetails(video);
     }
   }
 
@@ -573,13 +606,31 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     try {
       const job = await api.getJob(video.job_id);
       if (state.workspace.selectedVideoId !== video.video_id) return;
+
+      // The library snapshot can be stale. If the live job is still running, go back to
+      // the loader and resume tracking instead of mounting the player.
+      if (isJobActive(job.status)) {
+        showCenterForVideo({
+          ...video,
+          status: job.status,
+          current_stage: job.current_stage,
+          defer_player: true,
+        });
+        startPollingJob(video.job_id, video.video_id, video.filename, {
+          video: { ...video, current_stage: job.current_stage },
+          deferPlayer: true,
+        });
+        refreshVideos();
+        return;
+      }
+
       showCenterForVideo({
         ...video,
         summary: job.summary || video.summary,
-        chapters: job.chapters,
+        chapters: job.chapters || video.chapters,
         status: job.status,
+        current_stage: job.current_stage,
         error_message: job.error_message,
-        defer_player: job.status === "failed" && job.current_stage === "downloading",
       });
     } catch (_error) {
       if (state.workspace.selectedVideoId === video.video_id && state.ui.screen === "workspace") {
@@ -590,12 +641,13 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
 
   function showCenterForVideo(video) {
     if (video.video_id) state.workspace.selectedVideoId = video.video_id;
+    workspaceDeleteBtn.hidden = !video.video_id;
 
-    if (video.defer_player) {
-      pausePlayback();
-      setMediaPlaceholder(placeholderConfig({ failed: video.status === "failed", fromUrl: Boolean(video.from_url) }));
+    const defer = Boolean(video.defer_player) || shouldDeferPlayer(video.status, video.current_stage);
+    if (defer) {
+      deferMedia(normalize(video.status) === "failed");
     } else {
-      setMediaPlaceholder(null);
+      releaseMedia();
       if (video.video_id) player.ensureVideoLoaded(video);
     }
 
@@ -640,13 +692,16 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     state.workspace.scopedVideoId = null;
     state.workspace.scopedVideoTitle = null;
     state.workspace.selectedVideoId = null;
+    state.workspace.mediaDeferred = false;
     signalPath.hidden = true;
     lastStepsKey = null;
     setMediaPlaceholder(null);
+    player.reset();
     clearIngestError();
     centerEmpty.hidden = false;
     centerContent.classList.remove("show");
     document.getElementById("centerTitle").textContent = "—";
+    workspaceDeleteBtn.hidden = true;
     document.getElementById("centerSummary").textContent = "";
     document.getElementById("centerChapters").innerHTML = "";
     document.getElementById("chaptersLabel").hidden = true;

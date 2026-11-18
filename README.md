@@ -30,7 +30,7 @@ ClipSearch is a powerful, locally-hosted video library and search engine. It aut
 * **Visual Captioning:** `Salesforce/blip-image-captioning-base`
 * **Speaker Diarization:** `pyannote/speaker-diarization-3.1` (Optional)
 * **Embeddings & Search:** `BAAI/bge-small-en-v1.5` & `cross-encoder/ms-marco-MiniLM-L-6-v2`
-* **LLM (Chat & Summary):** Ollama (`llama3.2:3b` by default)
+* **LLM (Chat & Summary):** Ollama (`llama3.2:1b` by default)
 
 **Frontend**
 
@@ -95,7 +95,7 @@ cp .env.example .env
 Make sure Ollama is running, then pull the default model for summaries and chat:
 
 ```bash
-ollama pull llama3.2:3b
+ollama pull llama3.2:1b
 
 ```
 

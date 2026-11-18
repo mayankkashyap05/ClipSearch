@@ -343,8 +343,15 @@
                     </div>
                   </div>
                   <div class="video-detail-copy">
-                    <p class="detail-kicker">Selected video</p>
-                    <h2 id="centerTitle">—</h2>
+                    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;">
+                      <div style="min-width: 0;">
+                        <p class="detail-kicker">Selected video</p>
+                        <h2 id="centerTitle">—</h2>
+                      </div>
+                      <button type="button" class="btn btn-danger-quiet" id="workspaceDeleteBtn" hidden title="Delete this video">
+                        <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg><span class="sr-only">Delete</span>
+                      </button>
+                    </div>
                     <h3 class="detail-section-title">Summary</h3>
                     <div class="summary-text" id="centerSummary"></div>
                     <div class="detail-divider" id="chaptersDivider" hidden></div>
