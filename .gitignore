@@ -52,7 +52,7 @@ run.bat
 CODE.md
 codebase.yaml
 codebase.py
-scripts/
-tests/
+script/
+test/
 doc/
 versions/
