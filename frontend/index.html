@@ -13,7 +13,6 @@
   <link rel="stylesheet" href="/styles/shell.css" />
   <link rel="stylesheet" href="/styles/library.css" />
   <link rel="stylesheet" href="/styles/workspace.css" />
-  <link rel="stylesheet" href="/styles/live.css" />
   <link rel="stylesheet" href="/styles/responsive.css" />
   <script type="module" src="/src/main.js"></script>
 </head>
@@ -32,9 +31,6 @@
     <symbol id="icon-search" viewBox="0 0 24 24">
       <circle cx="10.8" cy="10.8" r="6.8" />
       <path d="m16 16 4.2 4.2" />
-    </symbol>
-    <symbol id="icon-live" viewBox="0 0 24 24">
-      <path d="M3 12h3l2.2-5.2L12 18l3.1-8 2 4H21" />
     </symbol>
     <symbol id="icon-upload" viewBox="0 0 24 24">
       <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
@@ -67,6 +63,12 @@
     </symbol>
     <symbol id="icon-chevron" viewBox="0 0 20 20">
       <path d="m5 7.5 5 5 5-5" />
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14" />
+    </symbol>
+    <symbol id="icon-chat" viewBox="0 0 24 24">
+      <path d="M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4 19.5l1.3-4.4A7.5 7.5 0 1 1 20 11.5z" />
     </symbol>
   </svg>
 
@@ -158,9 +160,6 @@
           <button class="nav-item" type="button" data-screen-target="workspace">
             <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Video workspace</span>
           </button>
-          <button class="nav-item" type="button" data-screen-target="live">
-            <svg class="icon" aria-hidden="true"><use href="#icon-live"></use></svg><span>Live sessions</span>
-          </button>
         </nav>
 
         <div class="sidebar-spacer"></div>
@@ -247,7 +246,7 @@
               <div class="page-heading-copy">
                 <p class="eyebrow">Search, review, understand</p>
                 <h1 class="page-title" id="workspaceTitle" tabindex="-1">Video workspace</h1>
-                <p class="page-description">Find a moment, jump into the recording, and explore it in context.</p>
+                <p class="page-description">Open a recording, jump to any moment, and ask questions about it — all in one place.</p>
               </div>
               <div class="page-actions workspace-actions">
                 <button class="btn btn-quiet" id="backToHome" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg><span>Library</span></button>
@@ -255,15 +254,19 @@
                   <span class="scope-indicator" aria-hidden="true"></span><span id="scopeChipLabel"></span>
                   <button type="button" id="clearScope" title="Search all videos" aria-label="Clear video search scope"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                 </div>
+                <button class="btn btn-primary add-video-btn" id="toggleIngest" type="button" aria-expanded="false" aria-controls="ingestPanel">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg><span>Add video</span>
+                </button>
               </div>
             </div>
 
-            <section class="panel ingest-panel" id="ingestPanel" aria-labelledby="ingestHeading">
+            <section class="panel ingest-panel" id="ingestPanel" aria-labelledby="ingestHeading" hidden>
               <div class="panel-header ingest-header">
                 <div class="panel-title-group">
                   <span class="panel-icon"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg></span>
                   <div><h2 class="panel-heading" id="ingestHeading">Add a recording</h2><p class="panel-caption">Upload a media file or add a video from its source URL.</p></div>
                 </div>
+                <button class="icon-btn" id="closeIngest" type="button" aria-label="Close add recording"><svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
               </div>
               <div class="ingest-layout">
                 <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Choose a video or audio file">
@@ -272,8 +275,8 @@
                   <span class="picked-file" id="pickedFile" aria-live="polite"></span>
                   <input type="file" id="fileInput" accept="video/*,audio/*" class="sr-only" tabindex="-1" aria-label="Choose a video or audio file" />
                 </div>
+                <span class="ingest-or" aria-hidden="true">or</span>
                 <div class="upload-link-column">
-                  <span class="ingest-or">OR ADD A LINK</span>
                   <form class="upload-form" id="uploadForm" novalidate>
                     <div class="field">
                       <label class="field-label" for="videoUrl">Video URL</label>
@@ -284,26 +287,32 @@
                   </form>
                 </div>
               </div>
+            </section>
+
+            <div class="workspace-status">
               <div class="ingest-error" id="ingestError" role="alert" aria-live="polite"></div>
               <div class="signal-path" id="signalPath" hidden aria-live="polite">
                 <div class="signal-header"><h3 class="signal-heading">Processing progress</h3><span class="signal-caption">Your video will be searchable when indexing is complete.</span></div>
+                <div class="signal-meter" aria-hidden="true"><span></span></div>
                 <div class="signal-steps" id="signalSteps"></div>
               </div>
-            </section>
+            </div>
 
-            <div class="workspace-grid">
-              <section class="panel center-panel" id="centerPanel" aria-labelledby="videoDetailHeading">
-                <div class="panel-header detail-panel-header">
-                  <div class="panel-title-group">
-                    <span class="panel-icon"><svg class="icon" aria-hidden="true"><use href="#icon-video"></use></svg></span>
-                    <div><h2 class="panel-heading" id="videoDetailHeading">Video details</h2><p class="panel-caption">Playback, summary, and chapters.</p></div>
-                  </div>
-                </div>
+            <div class="studio">
+              <section class="panel stage" id="centerPanel" aria-labelledby="videoDetailHeading">
+                <h2 class="sr-only" id="videoDetailHeading">Video details</h2>
                 <div class="detail-empty" id="centerEmpty">
                   <span class="detail-empty-icon"><svg class="icon" aria-hidden="true"><use href="#icon-video"></use></svg></span>
-                  <h3>Choose a video to get started</h3>
-                  <p>Open a recording from your library to see its summary, or search moments across your indexed videos.</p>
-                  <button class="btn btn-secondary" type="button" data-open-library>Browse library</button>
+                  <h3>Pick a video to get started</h3>
+                  <p>Open a recording to watch it with its summary and chapters, or search across everything you’ve indexed.</p>
+                  <div class="detail-empty-actions">
+                    <button class="btn btn-primary" type="button" data-open-ingest><svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg><span>Add a video</span></button>
+                    <button class="btn btn-secondary" type="button" data-open-library>Browse library</button>
+                  </div>
+                  <div class="recent-block" id="recentBlock" hidden>
+                    <p class="recent-heading">Or jump into one of your videos</p>
+                    <div class="recent-list" id="recentVideos"></div>
+                  </div>
                 </div>
                 <div class="center-content" id="centerContent">
                   <div class="player-shell" id="playerShell" data-state="idle">
@@ -320,7 +329,6 @@
                   <div class="video-detail-copy">
                     <p class="detail-kicker">Selected video</p>
                     <h2 id="centerTitle">—</h2>
-                    <div class="detail-divider"></div>
                     <h3 class="detail-section-title">Summary</h3>
                     <div class="summary-text" id="centerSummary"></div>
                     <div class="detail-divider" id="chaptersDivider" hidden></div>
@@ -330,25 +338,41 @@
                 </div>
               </section>
 
-              <section class="panel search-panel" id="searchPanel" aria-labelledby="searchHeading">
-                <div class="panel-header search-panel-header">
-                  <div class="panel-title-group">
-                    <span class="panel-icon"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg></span>
-                    <div><h2 class="panel-heading" id="searchHeading">Search moments</h2><p class="panel-caption">Explore speech and visual details.</p></div>
-                  </div>
-                </div>
-                <form class="search-form" id="searchForm">
-                  <label class="sr-only" for="searchInput">Search indexed video moments</label>
-                  <div class="search-box">
-                    <input type="search" id="searchInput" name="q" placeholder="Try a topic or phrase…" autocomplete="off" />
-                    <button class="btn btn-primary" id="searchBtn" type="submit" aria-label="Search videos"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Search</span></button>
-                  </div>
-                </form>
-                <div class="search-results" id="searchResults" aria-live="polite" aria-busy="false">
-                  <div class="results-empty"><strong>Search across your library</strong><p>Results include timestamps, so you can jump straight to the moment that matters.</p></div>
+              <section class="panel rail" id="searchPanel" aria-labelledby="searchHeading">
+                <h2 class="sr-only" id="searchHeading">Search moments and ask questions</h2>
+                <div class="rail-tabs" role="tablist" aria-label="Workspace tools">
+                  <button type="button" class="rail-tab active" role="tab" id="railTabSearch" data-rail-tab="search" aria-selected="true" aria-controls="railPaneSearch">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Search</span>
+                  </button>
+                  <button type="button" class="rail-tab" role="tab" id="railTabAsk" data-rail-tab="ask" aria-selected="false" aria-controls="railPaneAsk" tabindex="-1">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg><span>Ask</span>
+                  </button>
                 </div>
 
-                <section class="chat-section" aria-labelledby="chatHeading">
+                <div class="rail-pane" id="railPaneSearch" role="tabpanel" aria-labelledby="railTabSearch">
+                  <div class="scope-control">
+                    <div class="scope-row">
+                      <div class="scope-switch" id="scopeSwitch" role="group" aria-label="Search scope">
+                        <button type="button" class="scope-option active" data-scope="all" aria-pressed="true">All videos</button>
+                        <button type="button" class="scope-option" data-scope="video" aria-pressed="false" disabled>This video</button>
+                      </div>
+                      <span class="kbd-hint"><kbd>/</kbd> to search</span>
+                    </div>
+                    <p class="scope-hint" id="scopeHint">Searching every indexed video.</p>
+                  </div>
+                  <form class="search-form" id="searchForm">
+                    <label class="sr-only" for="searchInput">Search indexed video moments</label>
+                    <div class="search-box">
+                      <input type="search" id="searchInput" name="q" placeholder="Try a topic or phrase…" autocomplete="off" />
+                      <button class="btn btn-primary" id="searchBtn" type="submit" aria-label="Search videos"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Search</span></button>
+                    </div>
+                  </form>
+                  <div class="search-results" id="searchResults" aria-live="polite" aria-busy="false">
+                    <div class="results-empty"><strong>Search across your library</strong><p>Results include timestamps, so you can jump straight to the moment that matters.</p></div>
+                  </div>
+                </div>
+
+                <div class="rail-pane" id="railPaneAsk" role="tabpanel" aria-labelledby="railTabAsk" hidden>
                   <div class="chat-heading">
                     <div><h3 class="panel-heading" id="chatHeading">Ask about a video</h3><p class="panel-caption">Answers use the selected video's indexed content.</p></div>
                     <span class="chat-context" id="chatContext" hidden></span>
@@ -357,6 +381,11 @@
                   <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions text">
                     <p class="chat-empty" id="chatEmpty">Questions and sourced answers will appear here.</p>
                   </div>
+                  <div class="chat-suggestions" id="chatSuggestions" role="group" aria-label="Suggested questions" hidden>
+                    <button type="button" class="suggestion-chip" data-prompt="Summarize this video in a few sentences.">Summarize it</button>
+                    <button type="button" class="suggestion-chip" data-prompt="What are the key takeaways?">Key takeaways</button>
+                    <button type="button" class="suggestion-chip" data-prompt="Which topics are discussed, and when?">Topics &amp; timing</button>
+                  </div>
                   <form class="chat-form" id="chatForm">
                     <label class="sr-only" for="chatInput">Ask a question about the selected video</label>
                     <div class="search-box">
@@ -364,85 +393,6 @@
                       <button class="btn btn-secondary" id="chatBtn" type="submit" disabled>Ask</button>
                     </div>
                   </form>
-                </section>
-              </section>
-            </div>
-          </section>
-
-          <section class="app-page" id="live" aria-labelledby="liveTitle">
-            <div class="page-heading live-heading">
-              <div class="page-heading-copy">
-                <p class="eyebrow">Live transcription</p>
-                <h1 class="page-title" id="liveTitle" tabindex="-1">Live sessions</h1>
-                <p class="page-description">Start a session from a live source, follow its transcript, and search moments as they arrive.</p>
-              </div>
-              <div class="page-actions">
-                <span class="live-count" id="liveCount" role="status"><span class="live-count-dot" aria-hidden="true"></span><span>0 active</span></span>
-                <button class="btn btn-secondary" id="refreshLive" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span>Refresh</span></button>
-              </div>
-            </div>
-
-            <div class="live-grid">
-              <section class="panel live-control-panel" aria-labelledby="liveStartHeading">
-                <div class="panel-header">
-                  <div class="panel-title-group"><span class="panel-icon"><svg class="icon" aria-hidden="true"><use href="#icon-live"></use></svg></span><div><h2 class="panel-heading" id="liveStartHeading">Start a session</h2><p class="panel-caption">Connect an RTMP or other FFmpeg-readable source.</p></div></div>
-                </div>
-                <div class="live-error" id="liveError" role="alert" aria-live="polite"></div>
-                <form id="liveStartForm" class="live-start-form" novalidate>
-                  <div class="field">
-                    <label class="field-label" for="liveSourceUrl">Source URL</label>
-                    <input type="url" id="liveSourceUrl" name="source_url" placeholder="rtmp://…" autocomplete="url" required />
-                  </div>
-                  <div class="field">
-                    <label class="field-label" for="liveLanguage">Language <span class="optional-label">Optional</span></label>
-                    <input type="text" id="liveLanguage" name="language" placeholder="Auto-detect" autocomplete="off" />
-                    <span class="field-help">Leave blank to detect from the first audio segment.</span>
-                  </div>
-                  <button class="btn btn-primary btn-full" id="startLiveButton" type="submit"><svg class="icon" aria-hidden="true"><use href="#icon-live"></use></svg><span>Start live session</span></button>
-                </form>
-
-                <div class="live-session-list-section">
-                  <div class="live-list-heading"><h3>Active sessions</h3><span id="liveSessionListCount"></span></div>
-                  <div class="live-session-list" id="liveSessions" aria-live="polite" aria-busy="true">
-                    <div class="live-skeleton skeleton"></div><div class="live-skeleton skeleton"></div>
-                  </div>
-                </div>
-              </section>
-
-              <section class="panel live-detail-panel" aria-labelledby="liveSessionTitle">
-                <div class="live-session-header">
-                  <div class="live-session-heading">
-                    <p class="detail-kicker">Session detail</p>
-                    <h2 id="liveSessionTitle">Choose a live session</h2>
-                    <p class="panel-caption" id="liveSessionCaption">Transcript and search results appear when a session is selected.</p>
-                  </div>
-                  <div class="live-session-actions">
-                    <span class="live-status-badge" id="liveSessionStatus" hidden><span class="live-count-dot" aria-hidden="true"></span>Active</span>
-                    <button class="btn btn-danger-quiet" type="button" id="stopLiveButton" hidden><span>Stop session</span></button>
-                  </div>
-                </div>
-                <div class="live-detail-empty" id="liveSessionEmpty">
-                  <span class="detail-empty-icon"><svg class="icon" aria-hidden="true"><use href="#icon-live"></use></svg></span>
-                  <h3>No session selected</h3>
-                  <p>Choose an active session, or start one with a source URL to see its transcript and search indexed moments.</p>
-                </div>
-                <div class="live-session-content" id="liveSessionContent" hidden>
-                  <section class="live-transcript-section" aria-labelledby="liveTranscriptHeading">
-                    <div class="live-section-heading"><div><h3 id="liveTranscriptHeading">Live transcript</h3><p>New segments are checked automatically while this page is open.</p></div><span class="transcript-count" id="transcriptCount">0 segments</span></div>
-                    <div class="live-transcript" id="liveTranscript" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false">
-                      <p class="transcript-empty" id="transcriptEmpty">Waiting for transcript segments.</p>
-                    </div>
-                  </section>
-                  <section class="live-search-section" aria-labelledby="liveSearchHeading">
-                    <div class="live-section-heading"><div><h3 id="liveSearchHeading">Search this session</h3><p>Find a spoken moment by topic or phrase.</p></div></div>
-                    <form class="search-form" id="liveSearchForm">
-                      <label class="sr-only" for="liveSearchInput">Search this live session</label>
-                      <div class="search-box"><input type="search" id="liveSearchInput" name="q" placeholder="Search the live transcript…" autocomplete="off" /><button class="btn btn-secondary" type="submit" id="liveSearchButton"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Search</span></button></div>
-                    </form>
-                    <div class="live-search-results" id="liveSearchResults" aria-live="polite" aria-busy="false">
-                      <p class="live-search-empty">Search results for this session will appear here.</p>
-                    </div>
-                  </section>
                 </div>
               </section>
             </div>
@@ -453,7 +403,6 @@
       <nav class="mobile-nav" aria-label="Primary navigation">
         <button class="nav-item" type="button" data-screen-target="home" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-library"></use></svg><span>Library</span></button>
         <button class="nav-item" type="button" data-screen-target="workspace"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg><span>Workspace</span></button>
-        <button class="nav-item" type="button" data-screen-target="live"><svg class="icon" aria-hidden="true"><use href="#icon-live"></use></svg><span>Live</span></button>
       </nav>
     </div>
   </div>

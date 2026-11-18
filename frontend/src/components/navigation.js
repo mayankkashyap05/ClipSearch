@@ -1,6 +1,6 @@
 import { state } from "../state/app-state.js";
 
-const TOPBAR_LABELS = { home: "LIBRARY", workspace: "VIDEO WORKSPACE", live: "LIVE SESSIONS" };
+const TOPBAR_LABELS = { home: "LIBRARY", workspace: "VIDEO WORKSPACE" };
 
 export function showScreen(screenId, options = {}) {
   const signin = document.getElementById("signin");

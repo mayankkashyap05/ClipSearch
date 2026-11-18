@@ -98,28 +98,4 @@ export const api = {
     const path = "/chat?video_id=" + encodeURIComponent(videoId) + "&question=" + encodeURIComponent(question);
     return requestJson(path);
   },
-
-  listLiveSessions() {
-    return requestJson("/live");
-  },
-
-  startLiveSession({ sourceUrl, language }) {
-    return requestJson("/live/start", {
-      method: "POST",
-      ...jsonBody({ source_url: sourceUrl, language: language || null }),
-    });
-  },
-
-  getLiveTranscript(sessionId) {
-    return requestJson("/live/" + encodeURIComponent(sessionId) + "/transcript");
-  },
-
-  searchLiveSession(sessionId, query, limit = 8) {
-    const path = "/live/" + encodeURIComponent(sessionId) + "/search?q=" + encodeURIComponent(query) + "&limit=" + encodeURIComponent(limit);
-    return requestJson(path);
-  },
-
-  stopLiveSession(sessionId) {
-    return requestJson("/live/" + encodeURIComponent(sessionId) + "/stop", { method: "POST" });
-  },
 };

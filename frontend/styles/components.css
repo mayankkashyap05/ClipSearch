@@ -49,8 +49,7 @@
   font-size: var(--text-caption);
   white-space: nowrap;
 }
-.connection-status .dot,
-.live-count-dot {
+.connection-status .dot {
   width: 0.42rem;
   height: 0.42rem;
   flex: 0 0 auto;
@@ -77,11 +76,10 @@
 .library-error .btn { min-height: 2.3rem; flex: 0 0 auto; }
 
 .signin-error,
-.ingest-error,
-.live-error { margin: 0 0 var(--space-4); }
+.ingest-error { margin: 0 0 var(--space-4); }
+
 .signin-error:not(:empty),
-.ingest-error:not(:empty),
-.live-error:not(:empty) { display: block; }
+.ingest-error:not(:empty) { display: block; }
 
 .advanced-toggle {
   display: flex;

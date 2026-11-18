@@ -5,10 +5,10 @@ import { createAuthFeature } from "./features/auth/auth.js";
 import { createLibraryFeature } from "./features/videos/library.js";
 import { createPlayer } from "./features/videos/player.js";
 import { createWorkspaceFeature } from "./features/videos/workspace.js";
+import { createWorkspaceLayout } from "./features/videos/workspace-layout.js";
 import { createIngestFeature } from "./features/videos/ingest.js";
 import { createSearchFeature } from "./features/search/search.js";
 import { createChatFeature } from "./features/chat/chat.js";
-import { createLiveFeature } from "./features/live/live.js";
 
 let authFeature;
 configureApi({
@@ -31,7 +31,7 @@ library = createLibraryFeature({
 });
 const search = createSearchFeature({ player, workspace, library });
 const ingest = createIngestFeature({ workspace, refreshVideos: () => library.refreshVideos() });
-const live = createLiveFeature();
+const layout = createWorkspaceLayout({ workspace, resetChat: () => chat.reset() });
 
 authFeature = createAuthFeature({
   onAuthenticated: () => library.enterHome(),
@@ -41,17 +41,16 @@ authFeature = createAuthFeature({
     search.reset();
     ingest.reset();
     player.reset();
-    live.reset();
     state.library.items = [];
     state.library.loaded = false;
     state.library.loading = false;
     state.library.error = null;
     state.library.requestId += 1;
+    layout.reset();
   },
 });
 
 function navigate(screenId, focusTarget) {
-  if (state.ui.screen === "live" && screenId !== "live") live.deactivate();
   if (screenId === "home") {
     showScreen("home", { focus: true });
     library.refreshVideos();
@@ -59,11 +58,6 @@ function navigate(screenId, focusTarget) {
   }
   if (screenId === "workspace") {
     workspace.openWorkspace(focusTarget);
-    return;
-  }
-  if (screenId === "live") {
-    showScreen("live", { focus: true });
-    live.activate();
   }
 }
 

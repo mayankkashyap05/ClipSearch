@@ -20,6 +20,5 @@ The browser app is dependency-free vanilla JavaScript with native ES modules. Fa
 | File and URL ingestion | `POST /videos` with multipart field `file`; `POST /videos/from-url?url=...` |
 | Playback | `GET /videos/{video_id}/playback-token`; `<video>` then consumes the returned `stream_url` directly, preserving its video-bound token and browser Range requests |
 | Search and video Q&A | `GET /search?q=...&limit=...` with optional `video_id`; `GET /chat?video_id=...&question=...` |
-| Live sessions | `POST /live/start`; `GET /live`; `GET /live/{session_id}/transcript`; `GET /live/{session_id}/search`; `POST /live/{session_id}/stop` |
 
 The live screen uses only those existing `/live` routes and the response fields already returned by the backend. No server code, route, or model is part of this frontend refactor.

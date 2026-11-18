@@ -1,11 +1,5 @@
 @media (max-width: 1100px) and (min-width: 901px) {
   .app-page { padding-inline: var(--space-5); }
-  .workspace-grid { grid-template-columns: minmax(0, 1.02fr) minmax(18rem, 0.98fr); gap: var(--space-3); }
-  .center-panel,
-  .search-panel { padding: var(--space-4); }
-  .ingest-panel { padding: var(--space-4); }
-  .ingest-layout { grid-template-columns: minmax(0, 1fr) minmax(17rem, 0.95fr); gap: var(--space-3); }
-  .live-grid { grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 1.35fr); gap: var(--space-3); }
 }
 
 @media (max-width: 900px) {
@@ -22,10 +16,6 @@
   .mobile-signout { display: inline-flex; min-height: 2.2rem; padding: 0.5rem 0.68rem; font-size: 0.7rem; }
   .page-viewport { padding-bottom: calc(4.7rem + env(safe-area-inset-bottom)); }
   .app-page { padding: var(--space-7, 1.75rem) var(--space-5) var(--space-8); }
-  .workspace-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
-  .live-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
-  .live-control-panel { order: 0; }
-  .live-detail-panel { order: 1; }
   .mobile-nav {
     position: fixed;
     z-index: 20;
@@ -34,7 +24,7 @@
     left: 0;
     display: grid;
     min-height: calc(4.15rem + env(safe-area-inset-bottom));
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 0.2rem max(var(--space-3), env(safe-area-inset-left)) calc(0.2rem + env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-right));
     border-top: 1px solid var(--border);
     background: rgba(255, 255, 255, 0.97);
@@ -64,19 +54,10 @@
   .workspace-actions { flex-wrap: wrap; }
   .workspace-actions > .btn { flex: 0 0 auto; }
   .workspace-actions .scope-chip { margin-left: auto; }
-  .ingest-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
-  .drop-zone { min-height: 6rem; }
-  .upload-form { align-items: stretch; }
-  .upload-form .field { flex: initial; }
-  .upload-form .btn { width: 100%; }
-  .detail-empty { min-height: 15rem; }
   .search-box { gap: var(--space-2); }
   .search-box .btn { padding-inline: 0.68rem; }
   .search-form .search-box .btn { min-width: 2.8rem; }
   .search-form .search-box .btn span { display: none; }
-  .live-heading .page-actions { flex-wrap: wrap; }
-  .live-heading .page-actions .live-count { flex: 1; }
-  .live-heading .page-actions .btn { flex: 0 0 auto; }
   .library-error { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
   .library-error .btn { margin: 0; }
 }
