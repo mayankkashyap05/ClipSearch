@@ -4,7 +4,7 @@ import { showToast } from "../../components/feedback.js";
 import { showScreen } from "../../components/navigation.js";
 import { escapeHtml, formatTime, parseChapters } from "../../utils/format.js";
 
-// ───────────── Backend status / stage contract (configurable) ─────────────
+// ───────────── Backend status / stage contract ─────────────
 // Mirrors app/db/models.py (JobStatus) and app/workers/tasks.py (_run_pipeline).
 const JOB_STATUS = Object.freeze({
   PENDING: "pending",
@@ -14,17 +14,13 @@ const JOB_STATUS = Object.freeze({
 });
 
 // Stages during which the media file is NOT yet guaranteed servable (null/empty stage is also treated as downloading).
-const DOWNLOAD_STAGES = Object.freeze(["downloading"]);
-
-// Stages after download + storage commit where the file IS playable while background processing continues.
-const POST_DOWNLOAD_STAGES = Object.freeze([
-  "preprocessing",
-  "transcribing",
-  "diarizing",
-  "captioning",
-  "summarizing",
-  "indexing",
-  "done",
+const DOWNLOAD_STAGES = Object.freeze([
+  "downloading",
+  "queued",
+  "pending",
+  "fetching",
+  "merging",
+  "saving",
 ]);
 
 export const CENTER_STATE = Object.freeze({
@@ -98,11 +94,13 @@ function classifyJob(status, stage, download) {
     return { centerState: CENTER_STATE.LOADING, mediaAvailable: false, keepPolling: true };
   }
 
-  if (st === JOB_STATUS.PROCESSING && POST_DOWNLOAD_STAGES.includes(stageStr)) {
+  // Any non-download stage while processing (preprocessing, transcribing, diarizing,
+  // captioning, summarizing, indexing, embedding, etc.) means download has finished.
+  if (st === JOB_STATUS.PROCESSING && stageStr) {
     return { centerState: CENTER_STATE.PLAYABLE, mediaAvailable: true, keepPolling: true };
   }
 
-  // Defensive fallback for unknown non-terminal statuses or stages: keep loader up and keep polling.
+  // Defensive fallback for unknown non-terminal statuses: keep loader up and keep polling.
   return { centerState: CENTER_STATE.LOADING, mediaAvailable: false, keepPolling: true };
 }
 
@@ -347,7 +345,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
 
     if (!isDownloadStage(stage)) {
       view.caption = PLAYABLE_PROCESSING_CAPTION;
-      view.statusText = STAGE_ACTIVITY[stage] || "Working…";
+      view.statusText = STAGE_ACTIVITY[stage] || `Running ${stage.replace(/[_-]+/g, " ")}…`;
       view.statusDetail = `${elapsed} in this step`;
       return view;
     }
@@ -425,8 +423,9 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     setMediaPlaceholder(null);
   }
 
-  async function performSeekAndReveal(timestamp) {
+  async function performSeekAndReveal(timestamp, seekRequestId = null) {
     const played = await player.seekTo(timestamp);
+    if (seekRequestId != null && seekRequestId !== state.player.seekRequestId) return;
     const label = formatTime(player.getElement().currentTime);
     state.player.jumpedAt = Date.now();
     if (played) {
@@ -446,14 +445,14 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     const shouldForce = force || state.player.videoId !== videoId || state.player.state === "error";
 
     if (!shouldForce && state.player.loadPromise && (state.player.state === "ready" || state.player.state === "loading")) {
-      // Video is already playing or actively loading; if there is a queued seek, honour it.
       if (pendingSeek && pendingSeek.videoId === videoId) {
         const target = pendingSeek.timestamp;
         pendingSeek = null;
+        const seekId = ++state.player.seekRequestId;
         state.player.loadPromise
           .then(() => {
             if (epoch !== state.workspace.centerEpoch || state.workspace.selectedVideoId !== videoId) return;
-            return performSeekAndReveal(target);
+            return performSeekAndReveal(target, seekId);
           })
           .catch(() => {});
       }
@@ -466,11 +465,12 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
         if (pendingSeek && pendingSeek.videoId === videoId) {
           const target = pendingSeek.timestamp;
           pendingSeek = null;
-          return performSeekAndReveal(target);
+          const seekId = ++state.player.seekRequestId;
+          return performSeekAndReveal(target, seekId);
         }
       })
       .catch(() => {
-        // Player displays its own inline state once retries are exhausted.
+        // Player displays its own inline state and schedules background recovery.
       });
   }
 
@@ -519,6 +519,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
 
     if (centerState === CENTER_STATE.IDLE || !video || !video.video_id) {
       state.workspace.selectedVideoId = null;
+      state.workspace.selectedJobId = null;
       state.workspace.mediaDeferred = false;
       pendingSeek = null;
       setMediaPlaceholder(null);
@@ -535,6 +536,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     }
 
     state.workspace.selectedVideoId = video.video_id;
+    if (video.job_id) state.workspace.selectedJobId = video.job_id;
     workspaceDeleteBtn.hidden = false;
     centerEmpty.hidden = true;
     centerContent.classList.add("show");
@@ -542,7 +544,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     const switchingVideo = prevVideoId !== video.video_id;
 
     if (!mediaAvailable) {
-      // LOADING or download-stage FAILED: loader/failed placeholder only, player completely reset & hidden.
+      // LOADING or download-stage FAILED: placeholder only, player completely reset & hidden.
       const isFailed = centerState === CENTER_STATE.FAILED;
       if (switchingVideo || !wasDeferred || prevState !== centerState) {
         deferMedia(isFailed);
@@ -552,6 +554,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     } else {
       // PLAYABLE, PLAYABLE_DONE, or post-download FAILED: show player and load/recover cleanly.
       const becamePlayable = wasDeferred || switchingVideo || prevState === CENTER_STATE.LOADING || prevState === CENTER_STATE.IDLE;
+      if (becamePlayable && centerState !== CENTER_STATE.FAILED) clearIngestError();
       releaseMedia();
       loadPlayerForCurrentVideo(video, { force: becamePlayable });
     }
@@ -622,7 +625,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
         run.refreshedAfterDownload = true;
         refreshVideos();
       }
-      return false; // Continue polling until completed or failed
+      return { done: false, fast: decision.centerState === CENTER_STATE.LOADING };
     }
 
     // Terminal state: completed or failed.
@@ -649,7 +652,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     } else if (!selected || !onWorkspace) {
       showToast("error", mediaMissing ? "A video download failed." : "Video processing failed.");
     }
-    return true;
+    return { done: true, fast: false };
   }
 
   function startPollingJob(jobId, videoId, title, options = {}) {
@@ -687,8 +690,9 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
         const job = await api.getJob(jobId);
         if (!isCurrent()) return;
         run.errors = 0;
-        keepPolling = !handleJobUpdate(job, run);
-        if (job.download) nextDelay = POLL_FAST_MS;
+        const outcome = handleJobUpdate(job, run);
+        keepPolling = !outcome.done;
+        if (outcome.fast || job.download) nextDelay = POLL_FAST_MS;
       } catch (error) {
         if (!isCurrent()) return;
         run.errors += 1;
@@ -728,10 +732,10 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
 
     if (options.initialJob) {
       lastStepsKey = null;
-      const done = handleJobUpdate(options.initialJob, run);
-      if (!done && isCurrent()) {
-        scheduleNext(options.initialJob.download ? POLL_FAST_MS : POLL_NORMAL_MS);
-      } else if (done && isCurrent()) {
+      const outcome = handleJobUpdate(options.initialJob, run);
+      if (!outcome.done && isCurrent()) {
+        scheduleNext(outcome.fast || options.initialJob.download ? POLL_FAST_MS : POLL_NORMAL_MS);
+      } else if (outcome.done && isCurrent()) {
         pollNow = null;
         state.workspace.activeJobId = null;
       }
@@ -766,17 +770,19 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     clearIngestError();
     pendingSeek = seekTimestamp != null ? { videoId: video.video_id, timestamp: seekTimestamp } : null;
 
+    // Never show a previous video's progress steps while verifying the newly selected video.
+    signalPath.hidden = true;
+    lastStepsKey = null;
+
     if (!video.job_id) {
-      signalPath.hidden = true;
       transitionCenter({ centerState: CENTER_STATE.IDLE, mediaAvailable: false });
       return { playable: false, state: CENTER_STATE.IDLE };
     }
 
-    // Hold safely in LOADING (gate closed, no playback-token request) until live job confirms state.
     const snapshotStatus = normalize(video.status);
-    if (snapshotStatus === JOB_STATUS.COMPLETED || snapshotStatus === JOB_STATUS.FAILED) {
-      signalPath.hidden = true;
-    }
+    const isLikelyUrl = /^https?:\/\//i.test(String(video.filename || ""));
+
+    // Hold safely in LOADING (gate closed, no playback-token request) until live job confirms state.
     transitionCenter({
       centerState: CENTER_STATE.LOADING,
       mediaAvailable: false,
@@ -789,7 +795,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
         summary: video.summary || "",
         chapters: video.chapters || null,
       },
-      isUrlSource: /^https?:\/\//i.test(String(video.filename || "")),
+      isUrlSource: isLikelyUrl,
     });
 
     try {
@@ -816,7 +822,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
       }
 
       if (decision.keepPolling) {
-        // Active job (either LOADING or PLAYABLE post-download): hand off to epoch-guarded poller
+        // Active job (LOADING or PLAYABLE post-download): hand off to epoch-guarded poller
         // which immediately applies transitionCenter() and keeps updating progress until terminal.
         startPollingJob(video.job_id, mergedVideo.video_id, mergedVideo.filename, {
           initialJob: job,
@@ -842,25 +848,42 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
       }
 
       return { playable: decision.mediaAvailable, state: decision.centerState };
-    } catch (_error) {
+    } catch (error) {
       if (epoch !== state.workspace.centerEpoch) {
         return { playable: false, state: state.workspace.centerState };
       }
-      if (snapshotStatus === JOB_STATUS.COMPLETED) {
-        // Offline/transient fallback when reopening a known-completed video.
-        transitionCenter({
-          centerState: CENTER_STATE.PLAYABLE_DONE,
-          mediaAvailable: true,
-          video,
+      const status = error && error.status;
+      const permanent = status === 401 || status === 403 || status === 404;
+      if (!permanent) {
+        // Transient network/server error: hand off to the poller so backoff retries verify live job
+        // automatically instead of blindly trusting a stale snapshot or sticking on the loader.
+        startPollingJob(video.job_id, video.video_id, video.filename || video.video_id, {
+          source: isLikelyUrl ? "url" : undefined,
+          initialStage: "downloading",
         });
-        showToast("error", "Couldn’t confirm the latest video details.");
-        return { playable: true, state: CENTER_STATE.PLAYABLE_DONE };
+        return { playable: false, state: CENTER_STATE.LOADING };
       }
       if (state.ui.screen === "workspace") {
-        showToast("error", "Couldn’t load the latest video details. Reopen the video to retry.");
+        showToast("error", "Couldn’t load the latest video details.");
       }
       return { playable: false, state: CENTER_STATE.LOADING };
     }
+  }
+
+  function handleMediaNotReady(videoId) {
+    if (!videoId || state.workspace.selectedVideoId !== videoId) return;
+    if (pollNow) {
+      pollNow();
+      return;
+    }
+    const jobId = state.workspace.selectedJobId;
+    if (!jobId) return;
+    const item = state.library.items.find(v => v.video_id === videoId);
+    selectVideo(item || {
+      video_id: videoId,
+      job_id: jobId,
+      filename: document.getElementById("centerTitle").textContent,
+    });
   }
 
   function beginProcessing(jobId, videoId, title, options = {}) {
@@ -898,13 +921,23 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     if (focusTarget === "upload") requestAnimationFrame(() => document.getElementById("dropZone").focus());
     if (focusTarget === "search") requestAnimationFrame(() => document.getElementById("searchInput").focus());
 
-    // Immediately sync live job state when returning from another screen.
+    // Sync live state when returning from another screen.
     if (pollNow) {
       pollNow();
-    } else if (
+    } else if (state.workspace.selectedVideoId && state.workspace.mediaDeferred && state.workspace.selectedJobId) {
+      const item = state.library.items.find(v => v.video_id === state.workspace.selectedVideoId);
+      selectVideo(item || {
+        video_id: state.workspace.selectedVideoId,
+        job_id: state.workspace.selectedJobId,
+        filename: document.getElementById("centerTitle").textContent,
+      });
+      return;
+    }
+
+    if (
       state.workspace.selectedVideoId &&
       !state.workspace.mediaDeferred &&
-      state.player.state === "error"
+      (state.player.state === "error" || state.player.state === "idle")
     ) {
       const item = state.library.items.find(v => v.video_id === state.workspace.selectedVideoId);
       loadPlayerForCurrentVideo(
@@ -915,7 +948,8 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
   }
 
   function openVideoInWorkspace(video) {
-    openWorkspace();
+    // Do NOT call openWorkspace() here — that would trigger pollNow/player recovery for the PREVIOUS video.
+    showScreen("workspace", { focus: true });
     setScope(video.video_id, video.filename);
     resetChat();
     selectVideo(video);
@@ -944,6 +978,18 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     const seekRequestId = ++state.player.seekRequestId;
     showScreen("workspace");
 
+    // If this video is already selected and actively downloading, queue the seek without restarting the poller.
+    if (
+      state.workspace.selectedVideoId === videoId &&
+      state.workspace.centerState === CENTER_STATE.LOADING &&
+      pollNow
+    ) {
+      pendingSeek = { videoId, timestamp: targetTime };
+      pollNow();
+      showToast("success", "This video is still downloading — playback will jump to this moment automatically.");
+      return { jumped: false, reason: CENTER_STATE.LOADING };
+    }
+
     const alreadyPlayable =
       state.workspace.selectedVideoId === videoId &&
       !state.workspace.mediaDeferred &&
@@ -970,10 +1016,13 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
       return { jumped: true };
     }
 
+    // Taking the direct seek path: clear any stale queued seek so it cannot race after loadVideo().
+    pendingSeek = null;
+
     try {
       await player.loadVideo(videoId, fallbackTitle);
       if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
-      await performSeekAndReveal(targetTime);
+      await performSeekAndReveal(targetTime, seekRequestId);
       return { jumped: true };
     } catch (error) {
       if (error && (error.code === "SUPERSEDED" || error.code === "DEFERRED")) {
@@ -1016,6 +1065,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     openSearchResultVideo,
     jumpToVideoMoment,
     selectVideo,
+    handleMediaNotReady,
     beginProcessing,
     startPollingJob,
     stopJobPolling,

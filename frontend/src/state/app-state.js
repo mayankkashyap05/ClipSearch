@@ -18,6 +18,7 @@ export const state = {
     scopedVideoId: null,
     scopedVideoTitle: null,
     selectedVideoId: null,
+    selectedJobId: null,
     centerState: "IDLE", // "IDLE" | "LOADING" | "PLAYABLE" | "PLAYABLE_DONE" | "FAILED"
     // True while the selected video's media is not servable (pending/downloading,
     // verifying live job, or failed during download). The player must not request a stream.

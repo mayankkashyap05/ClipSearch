@@ -3,14 +3,15 @@ import { state } from "./state/app-state.js";
 import { initNavigation, showScreen, updateAccount } from "./components/navigation.js";
 import { createAuthFeature } from "./features/auth/auth.js";
 import { createLibraryFeature } from "./features/videos/library.js";
-import { createPlayer } from "./features/videos/player.js";
-import { createWorkspaceFeature } from "./features/videos/workspace.js";
-import { createWorkspaceLayout } from "./features/videos/workspace-layout.js";
+import { createPlayer } from "./features/videos/player.js?v=2";
+import { createWorkspaceFeature } from "./features/videos/workspace.js?v=2";
+import { createWorkspaceLayout } from "./features/videos/workspace-layout.js?v=2";
 import { createIngestFeature } from "./features/videos/ingest.js";
 import { createSearchFeature } from "./features/search/search.js";
 import { createChatFeature } from "./features/chat/chat.js";
 
 let authFeature;
+let workspace;
 configureApi({
   apiBase: () => state.auth.apiBase,
   accessToken: () => state.auth.token,
@@ -24,11 +25,12 @@ const player = createPlayer({
     Boolean(videoId) &&
     state.workspace.selectedVideoId === videoId &&
     !state.workspace.mediaDeferred,
+  onMediaNotReady: videoId => workspace && workspace.handleMediaNotReady(videoId),
 });
 
 let library;
 let chat;
-const workspace = createWorkspaceFeature({
+workspace = createWorkspaceFeature({
   player,
   refreshVideos: () => library && library.refreshVideos(),
   findVideo: videoId => (library ? library.findVideo(videoId) : Promise.resolve(null)),

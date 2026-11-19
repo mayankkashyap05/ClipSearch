@@ -10,7 +10,7 @@ function submitForm(form) {
 
 /*
  * Presentation-only behavior for the workspace: add-video drawer, Search/Ask tabs,
- * search-scope switch, suggested questions, quick-open list, and progress meter.
+ * search-scope switch, suggested questions, and quick-open list.
  * It reads existing state and calls existing workspace APIs; it adds no endpoints.
  */
 export function createWorkspaceLayout({ workspace, resetChat }) {
@@ -173,18 +173,6 @@ export function createWorkspaceLayout({ workspace, resetChat }) {
 
   // library.js rewrites this label on every refresh, which is our cue to re-render.
   new MutationObserver(renderRecents).observe($("libraryCount"), { childList: true, characterData: true, subtree: true });
-
-  /* ---------- Processing meter ---------- */
-  function syncProgress() {
-    const steps = [...$("signalSteps").children];
-    if (!steps.length) return;
-    const done = steps.filter(step => step.classList.contains("done")).length;
-    const running = steps.some(step => step.classList.contains("active")) ? 0.5 : 0;
-    const failed = steps.some(step => step.classList.contains("failed"));
-    signalPath.style.setProperty("--progress", Math.min(1, (done + running) / steps.length).toFixed(3));
-    signalPath.dataset.state = failed ? "failed" : done === steps.length ? "complete" : "running";
-  }
-  new MutationObserver(syncProgress).observe($("signalSteps"), { childList: true });
 
   function reset() {
     setIngestOpen(false);

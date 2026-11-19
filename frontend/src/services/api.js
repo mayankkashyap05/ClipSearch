@@ -1,6 +1,6 @@
 /*
-- Browser-only transport layer. Endpoint paths, HTTP methods, query names,
-- payload keys, auth headers, and playback-token URLs mirror app/api/main.py.
+ * Browser-only transport layer. Endpoint paths, HTTP methods, query names,
+ * payload keys, auth headers, and playback-token URLs mirror app/api/main.py.
  */
 let getApiBase = () => window.location.origin;
 let getAccessToken = () => null;
@@ -107,6 +107,23 @@ export const api = {
 
   getPlaybackToken(videoId) {
     return requestJson("/videos/" + encodeURIComponent(videoId) + "/playback-token");
+  },
+
+  async probeStream(streamUrl) {
+    const response = await fetch(streamUrl, {
+      method: "HEAD",
+      cache: "no-store",
+    });
+    if (response.ok) return { ok: true, status: response.status };
+    let detail = response.statusText;
+    try {
+      const body = await response.clone().json();
+      const parsed = body && detailToMessage(body.detail);
+      if (parsed) detail = parsed;
+    } catch (_error) {
+      // HEAD responses omit a body; status code carries the signal.
+    }
+    return { ok: false, status: response.status, detail };
   },
 
   searchVideos(query, limit = 8, videoId = null) {
