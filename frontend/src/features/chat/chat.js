@@ -1,9 +1,8 @@
 import { api } from "../../services/api.js";
 import { state } from "../../state/app-state.js";
-import { showToast } from "../../components/feedback.js";
 import { formatTime } from "../../utils/format.js";
 
-export function createChatFeature({ player }) {
+export function createChatFeature({ workspace }) {
   const input = document.getElementById("chatInput");
   const button = document.getElementById("chatBtn");
   const form = document.getElementById("chatForm");
@@ -60,23 +59,7 @@ export function createChatFeature({ player }) {
 
   async function jumpToSource(timestamp, videoId) {
     if (!videoId) return;
-    try {
-      await player.loadVideo(videoId, state.workspace.scopedVideoTitle);
-      const played = await player.seekTo(timestamp);
-      const label = formatTime(player.getElement().currentTime);
-      state.player.jumpedAt = Date.now();
-      if (played) {
-        player.setPlayerState("ready", "Playing from " + label);
-        player.showResumeButton(false);
-      } else {
-        player.setPlayerState("ready", "Jumped to " + label + " · press Play to continue");
-        player.showResumeButton(true);
-      }
-      player.reveal();
-    } catch (error) {
-      player.setPlayerState("error", player.friendlyPlaybackError(error));
-      showToast("error", "Couldn’t open that source moment. Try selecting the video again.");
-    }
+    await workspace.jumpToVideoMoment(videoId, timestamp, state.workspace.scopedVideoTitle);
   }
 
   async function submitQuestion(event) {

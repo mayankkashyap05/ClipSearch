@@ -18,11 +18,14 @@ export const state = {
     scopedVideoId: null,
     scopedVideoTitle: null,
     selectedVideoId: null,
-    // True while the selected video's media is not ready (job still running, or the
-    // download failed). The player must not request a stream while this is set.
+    centerState: "IDLE", // "IDLE" | "LOADING" | "PLAYABLE" | "PLAYABLE_DONE" | "FAILED"
+    // True while the selected video's media is not servable (pending/downloading,
+    // verifying live job, or failed during download). The player must not request a stream.
     mediaDeferred: false,
     jobPollTimer: null,
     activeJobId: null,
+    activePollEpoch: 0,
+    centerEpoch: 0,
     searchResults: [],
     activeResultIndex: -1,
     searchRequestId: 0,
@@ -33,6 +36,7 @@ export const state = {
     streamUrl: null,
     tokenIssuedAt: 0,
     loadPromise: null,
+    state: "idle", // "idle" | "loading" | "ready" | "error"
     seekRequestId: 0,
     retried: false,
     autoRetries: 0,

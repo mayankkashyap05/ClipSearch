@@ -2,7 +2,38 @@ import { api } from "../../services/api.js";
 import { state } from "../../state/app-state.js";
 import { showToast } from "../../components/feedback.js";
 import { showScreen } from "../../components/navigation.js";
-import { escapeHtml, parseChapters } from "../../utils/format.js";
+import { escapeHtml, formatTime, parseChapters } from "../../utils/format.js";
+
+// ───────────── Backend status / stage contract (configurable) ─────────────
+// Mirrors app/db/models.py (JobStatus) and app/workers/tasks.py (_run_pipeline).
+const JOB_STATUS = Object.freeze({
+  PENDING: "pending",
+  PROCESSING: "processing",
+  COMPLETED: "completed",
+  FAILED: "failed",
+});
+
+// Stages during which the media file is NOT yet guaranteed servable (null/empty stage is also treated as downloading).
+const DOWNLOAD_STAGES = Object.freeze(["downloading"]);
+
+// Stages after download + storage commit where the file IS playable while background processing continues.
+const POST_DOWNLOAD_STAGES = Object.freeze([
+  "preprocessing",
+  "transcribing",
+  "diarizing",
+  "captioning",
+  "summarizing",
+  "indexing",
+  "done",
+]);
+
+export const CENTER_STATE = Object.freeze({
+  IDLE: "IDLE",
+  LOADING: "LOADING",
+  PLAYABLE: "PLAYABLE",
+  PLAYABLE_DONE: "PLAYABLE_DONE",
+  FAILED: "FAILED",
+});
 
 const STAGE_ORDER = ["downloading", "preprocessing", "transcribing", "diarizing", "captioning", "summarizing", "indexing", "done"];
 const STAGE_LABELS = {
@@ -23,45 +54,59 @@ const STAGE_ACTIVITY = {
   summarizing: "Writing the summary and chapters…",
   indexing: "Indexing everything for search…",
 };
-const TERMINAL_STATUSES = new Set(["completed", "failed"]);
 
-// Polling. There is deliberately NO overall timeout: a job keeps being tracked
-// until the server reports completed/failed. Only repeated network errors stop it.
-const POLL_FAST_MS = 1500;           // while a download is reporting progress
+// Polling: no overall timeout; stops only on a terminal backend status or repeated network errors.
+const POLL_FAST_MS = 1500;
 const POLL_NORMAL_MS = 3000;
-const POLL_RETRY_MAX_MS = 15000;     // backoff ceiling after failed requests
+const POLL_RETRY_MAX_MS = 15000;
 const POLL_MAX_CONSECUTIVE_ERRORS = 20;
 const SLOW_DOWNLOAD_HINT_MS = 90 * 1000;
 
 const DEFAULT_CAPTION = "Your video will be searchable when indexing is complete.";
 const URL_DOWNLOAD_CAPTION = "Fetching your video from its source. Long videos can take a few minutes.";
+const PLAYABLE_PROCESSING_CAPTION = "Your video is ready to watch while search indexing finishes in the background.";
 const SLOW_DOWNLOAD_CAPTION = "Still downloading. Large videos can take several minutes. Keep this tab open and we'll continue automatically.";
 
 function normalize(value) {
-  return String(value || "").toLowerCase();
+  return String(value || "").trim().toLowerCase();
 }
 
-/** A job is "active" unless the server has said it is completed or failed. (Blacklist, not whitelist.) */
-function isJobActive(status) {
-  return !TERMINAL_STATUSES.has(normalize(status));
+function isDownloadStage(stage) {
+  const value = normalize(stage);
+  if (!value) return true; // null/empty stage before worker advances past download
+  return DOWNLOAD_STAGES.includes(value);
 }
 
 /**
- * Single source of truth for "may the <video> player be mounted yet?"
- *  - completed                      -> yes
- *  - failed after the download step -> yes (the file exists)
- *  - failed during download         -> no (media missing; show the failed placeholder)
- *  - anything else (pending, processing, unknown, in-flight) -> no
+ * Single source of truth mapping a live job payload into the center-panel state machine.
  */
-function shouldDeferPlayer(status, stage) {
-  const value = normalize(status);
-  if (value === "completed") return false;
-  if (value === "failed") return normalize(stage) === "downloading";
-  return true;
+function classifyJob(status, stage, download) {
+  const st = normalize(status);
+  const stageStr = normalize(stage);
+  const hasActiveDownload = Boolean(download);
+
+  if (st === JOB_STATUS.COMPLETED) {
+    return { centerState: CENTER_STATE.PLAYABLE_DONE, mediaAvailable: true, keepPolling: false };
+  }
+
+  if (st === JOB_STATUS.FAILED) {
+    const failedPostDownload = Boolean(stageStr) && !isDownloadStage(stageStr) && !hasActiveDownload;
+    return { centerState: CENTER_STATE.FAILED, mediaAvailable: failedPostDownload, keepPolling: false };
+  }
+
+  if (st === JOB_STATUS.PENDING || hasActiveDownload || isDownloadStage(stageStr)) {
+    return { centerState: CENTER_STATE.LOADING, mediaAvailable: false, keepPolling: true };
+  }
+
+  if (st === JOB_STATUS.PROCESSING && POST_DOWNLOAD_STAGES.includes(stageStr)) {
+    return { centerState: CENTER_STATE.PLAYABLE, mediaAvailable: true, keepPolling: true };
+  }
+
+  // Defensive fallback for unknown non-terminal statuses or stages: keep loader up and keep polling.
+  return { centerState: CENTER_STATE.LOADING, mediaAvailable: false, keepPolling: true };
 }
 
 function setText(element, text) {
-  // Only touch the DOM when text changes (avoids needless screen-reader chatter).
   if (element && element.textContent !== text) element.textContent = text;
 }
 
@@ -110,18 +155,18 @@ function placeholderConfig({ failed = false } = {}) {
   if (failed) {
     return {
       state: "failed",
-      title: "Processing failed",
-      text: "We couldn't process this video. See the details below.",
+      title: "Download failed",
+      text: "We couldn't download this video. See the details below.",
     };
   }
   return {
     state: "loading",
     title: "Getting your video ready…",
-    text: "Your video will appear here as soon as processing is complete.",
+    text: "Playback will start automatically as soon as the download finishes.",
   };
 }
 
-export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
+export function createWorkspaceFeature({ player, refreshVideos, findVideo, resetChat }) {
   const centerEmpty = document.getElementById("centerEmpty");
   const centerContent = document.getElementById("centerContent");
   const signalPath = document.getElementById("signalPath");
@@ -139,15 +184,14 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
 
   let lastStepsKey = null;
   let pollNow = null;
+  let pendingSeek = null; // { videoId: string, timestamp: number } | null
 
-  // Handles closing the active workspace session if deleted from the library view
   window.addEventListener("videoDeleted", event => {
     if (state.workspace.selectedVideoId === event.detail.videoId) {
       reset();
     }
   });
 
-  // Handle direct deletion from the active Workspace view
   workspaceDeleteBtn.addEventListener("click", async () => {
     const videoId = state.workspace.selectedVideoId;
     if (!videoId) return;
@@ -162,12 +206,6 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
       }
     }
   });
-
-  function openWorkspace(focusTarget) {
-    showScreen("workspace", { focus: !focusTarget });
-    if (focusTarget === "upload") requestAnimationFrame(() => document.getElementById("dropZone").focus());
-    if (focusTarget === "search") requestAnimationFrame(() => document.getElementById("searchInput").focus());
-  }
 
   function clearIngestError() {
     ingestError.textContent = "";
@@ -262,17 +300,22 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
         ? (run.isUrlSource ? "Contacting the video source…" : "Starting…")
         : (STAGE_ACTIVITY[stage] || "Working…"),
       statusDetail: "",
-      caption: run.isUrlSource ? URL_DOWNLOAD_CAPTION : DEFAULT_CAPTION,
+      caption: downloading
+        ? (run.isUrlSource ? URL_DOWNLOAD_CAPTION : DEFAULT_CAPTION)
+        : PLAYABLE_PROCESSING_CAPTION,
     });
   }
 
   function describeJob(job, run) {
-    const failed = job.status === "failed";
-    const completed = job.status === "completed";
-    const pending = job.status === "pending";
-    const stage = pending ? "downloading" : (job.current_stage || "downloading");
+    const status = normalize(job.status);
+    const failed = status === JOB_STATUS.FAILED;
+    const completed = status === JOB_STATUS.COMPLETED;
+    const pending = status === JOB_STATUS.PENDING;
+    const stage = pending ? "downloading" : (normalize(job.current_stage) || "downloading");
     const view = {
-      stage, failed, completed,
+      stage,
+      failed,
+      completed,
       waiting: false,
       progress: computeProgress(stage, completed, null),
       stepLabel: "Running",
@@ -302,7 +345,8 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
       return view;
     }
 
-    if (stage !== "downloading") {
+    if (!isDownloadStage(stage)) {
+      view.caption = PLAYABLE_PROCESSING_CAPTION;
       view.statusText = STAGE_ACTIVITY[stage] || "Working…";
       view.statusDetail = `${elapsed} in this step`;
       return view;
@@ -354,7 +398,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     return view;
   }
 
-  // ───────────── Media placeholder / player gate ─────────────
+  // ───────────── Center-panel state machine ─────────────
 
   function setMediaPlaceholder(config) {
     if (!mediaPending) return;
@@ -370,23 +414,152 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     if (playerShell) playerShell.hidden = true;
   }
 
-  /**
-   * Keep the "Getting your video ready…" screen up and make sure the player is completely
-   * idle: gate closed (no stream requests), any stale <video src> released, retries cancelled.
-   */
   function deferMedia(failed) {
     state.workspace.mediaDeferred = true;
     player.reset();
     setMediaPlaceholder(placeholderConfig({ failed }));
   }
 
-  /** Processing is finished: open the gate and show the player shell. */
   function releaseMedia() {
     state.workspace.mediaDeferred = false;
     setMediaPlaceholder(null);
   }
 
-  // ───────────── Polling ─────────────
+  async function performSeekAndReveal(timestamp) {
+    const played = await player.seekTo(timestamp);
+    const label = formatTime(player.getElement().currentTime);
+    state.player.jumpedAt = Date.now();
+    if (played) {
+      player.setPlayerState("ready", "Playing from " + label);
+      player.showResumeButton(false);
+    } else {
+      player.setPlayerState("ready", "Jumped to " + label + " · press Play to continue");
+      player.showResumeButton(true);
+    }
+    player.reveal();
+  }
+
+  function loadPlayerForCurrentVideo(video, { force = false } = {}) {
+    if (!video || !video.video_id) return;
+    const videoId = video.video_id;
+    const epoch = state.workspace.centerEpoch;
+    const shouldForce = force || state.player.videoId !== videoId || state.player.state === "error";
+
+    if (!shouldForce && state.player.loadPromise && (state.player.state === "ready" || state.player.state === "loading")) {
+      // Video is already playing or actively loading; if there is a queued seek, honour it.
+      if (pendingSeek && pendingSeek.videoId === videoId) {
+        const target = pendingSeek.timestamp;
+        pendingSeek = null;
+        state.player.loadPromise
+          .then(() => {
+            if (epoch !== state.workspace.centerEpoch || state.workspace.selectedVideoId !== videoId) return;
+            return performSeekAndReveal(target);
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+
+    player.loadVideo(videoId, video.filename, { force: shouldForce })
+      .then(() => {
+        if (epoch !== state.workspace.centerEpoch || state.workspace.selectedVideoId !== videoId) return;
+        if (pendingSeek && pendingSeek.videoId === videoId) {
+          const target = pendingSeek.timestamp;
+          pendingSeek = null;
+          return performSeekAndReveal(target);
+        }
+      })
+      .catch(() => {
+        // Player displays its own inline state once retries are exhausted.
+      });
+  }
+
+  function renderCenterMetadata(video, centerState, isUrlSource) {
+    document.getElementById("centerTitle").textContent = video.filename || video.video_id || "Video";
+
+    let summaryText = video.summary || "";
+    if (!summaryText) {
+      if (centerState === CENTER_STATE.FAILED) {
+        summaryText = video.error_message
+          ? "Processing failed: " + video.error_message
+          : "Processing did not complete. Try adding this video again if you still need it indexed.";
+      } else if (centerState === CENTER_STATE.LOADING) {
+        summaryText = isUrlSource
+          ? "Fetching your video from its source. Playback will begin automatically as soon as the download finishes."
+          : "Preparing your video. Playback will begin automatically in a moment.";
+      } else if (centerState === CENTER_STATE.PLAYABLE) {
+        summaryText = "Your video is ready to watch while we finish transcribing and indexing it. Your summary and chapters will appear here automatically.";
+      } else {
+        summaryText = "No summary available for this video.";
+      }
+    }
+    document.getElementById("centerSummary").textContent = summaryText;
+
+    const chaptersLabel = document.getElementById("chaptersLabel");
+    const chaptersDivider = document.getElementById("chaptersDivider");
+    const chaptersContainer = document.getElementById("centerChapters");
+    const chapters = parseChapters(video.chapters);
+    chaptersLabel.hidden = chapters.length === 0;
+    chaptersDivider.hidden = chapters.length === 0;
+    chaptersContainer.innerHTML = chapters.map((chapter, index) => {
+      const label = (chapter && (chapter.title || chapter.text)) || JSON.stringify(chapter) || "Chapter";
+      return `<div class="chapter-item"><span class="chapter-marker" aria-hidden="true">${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
+    }).join("");
+  }
+
+  /**
+   * Single state-machine transition function for the center panel.
+   */
+  function transitionCenter({ centerState, mediaAvailable, video = null, isUrlSource = false }) {
+    const prevState = state.workspace.centerState;
+    const prevVideoId = state.workspace.selectedVideoId;
+    const wasDeferred = state.workspace.mediaDeferred;
+
+    state.workspace.centerState = centerState;
+
+    if (centerState === CENTER_STATE.IDLE || !video || !video.video_id) {
+      state.workspace.selectedVideoId = null;
+      state.workspace.mediaDeferred = false;
+      pendingSeek = null;
+      setMediaPlaceholder(null);
+      player.reset();
+      centerEmpty.hidden = false;
+      centerContent.classList.remove("show");
+      document.getElementById("centerTitle").textContent = "—";
+      workspaceDeleteBtn.hidden = true;
+      document.getElementById("centerSummary").textContent = "";
+      document.getElementById("centerChapters").innerHTML = "";
+      document.getElementById("chaptersLabel").hidden = true;
+      document.getElementById("chaptersDivider").hidden = true;
+      return;
+    }
+
+    state.workspace.selectedVideoId = video.video_id;
+    workspaceDeleteBtn.hidden = false;
+    centerEmpty.hidden = true;
+    centerContent.classList.add("show");
+
+    const switchingVideo = prevVideoId !== video.video_id;
+
+    if (!mediaAvailable) {
+      // LOADING or download-stage FAILED: loader/failed placeholder only, player completely reset & hidden.
+      const isFailed = centerState === CENTER_STATE.FAILED;
+      if (switchingVideo || !wasDeferred || prevState !== centerState) {
+        deferMedia(isFailed);
+      } else {
+        setMediaPlaceholder(placeholderConfig({ failed: isFailed }));
+      }
+    } else {
+      // PLAYABLE, PLAYABLE_DONE, or post-download FAILED: show player and load/recover cleanly.
+      const becamePlayable = wasDeferred || switchingVideo || prevState === CENTER_STATE.LOADING || prevState === CENTER_STATE.IDLE;
+      releaseMedia();
+      loadPlayerForCurrentVideo(video, { force: becamePlayable });
+    }
+
+    renderCenterMetadata(video, centerState, isUrlSource);
+  }
+
+  // ───────────── Polling (epoch-protected) ─────────────
 
   function clearPollTimer() {
     if (state.workspace.jobPollTimer) window.clearTimeout(state.workspace.jobPollTimer);
@@ -396,6 +569,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   function stopJobPolling() {
     clearPollTimer();
     state.workspace.activeJobId = null;
+    state.workspace.activePollEpoch += 1;
     pollNow = null;
   }
 
@@ -409,10 +583,9 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   }
 
   function handleJobUpdate(job, run) {
-    const failed = job.status === "failed";
-    const completed = job.status === "completed";
-    const pending = job.status === "pending";
-    const stageKey = pending ? "pending" : (job.current_stage || "downloading");
+    const decision = classifyJob(job.status, job.current_stage, job.download);
+    const pending = normalize(job.status) === JOB_STATUS.PENDING;
+    const stageKey = pending ? "pending" : (normalize(job.current_stage) || "downloading");
 
     if (run.stageKey !== stageKey) {
       run.stageKey = stageKey;
@@ -423,41 +596,51 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     paintSignal(describeJob(job, run));
 
     const selected = state.workspace.selectedVideoId === run.videoId;
+    const mergedVideo = {
+      video_id: job.video_id || run.videoId,
+      filename: run.title || job.filename || job.video_id || run.videoId,
+      job_id: job.job_id || run.jobId,
+      status: job.status,
+      current_stage: job.current_stage,
+      summary: job.summary || "",
+      chapters: job.chapters || null,
+      error_message: job.error_message || null,
+      download: job.download || null,
+    };
 
-    if (!failed && !completed) {
-      // Still running (including every downloading step): the loader stays up, the player stays idle.
-      if (selected && !state.workspace.mediaDeferred) deferMedia(false);
-      return false; // Keep polling
+    if (selected) {
+      transitionCenter({
+        centerState: decision.centerState,
+        mediaAvailable: decision.mediaAvailable,
+        video: mergedVideo,
+        isUrlSource: run.isUrlSource,
+      });
     }
 
-    // Processing has finished or failed.
+    if (decision.keepPolling) {
+      if (decision.centerState === CENTER_STATE.PLAYABLE && !run.refreshedAfterDownload) {
+        run.refreshedAfterDownload = true;
+        refreshVideos();
+      }
+      return false; // Continue polling until completed or failed
+    }
+
+    // Terminal state: completed or failed.
     refreshVideos();
     const onWorkspace = state.ui.screen === "workspace";
-    const mediaMissing = failed && shouldDeferPlayer("failed", stageKey);
+    const completed = decision.centerState === CENTER_STATE.PLAYABLE_DONE;
+    const mediaMissing = !decision.mediaAvailable;
 
-    // Repaint the center whenever this video is the selected one — even if the user is
-    // currently on another screen — so returning to the workspace never shows a stale loader.
     if (selected) {
-      showCenterForVideo({
-        video_id: job.video_id || run.videoId,
-        filename: run.title || job.video_id || run.videoId,
-        summary: job.summary,
-        chapters: job.chapters,
-        status: job.status,
-        current_stage: stageKey,
-        error_message: job.error_message,
-        defer_player: mediaMissing,
-        from_url: run.isUrlSource,
-      });
-      if (failed) {
+      if (completed) {
+        clearIngestError();
+      } else {
         const prefix = mediaMissing ? "Download failed: " : "Processing failed: ";
         showIngestError(job.error_message
           ? prefix + job.error_message
           : mediaMissing
             ? "Download failed. Check the link and try again."
             : "Processing failed. You can try adding the video again.");
-      } else {
-        clearIngestError();
       }
     }
 
@@ -471,6 +654,7 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
 
   function startPollingJob(jobId, videoId, title, options = {}) {
     stopJobPolling();
+    const pollEpoch = ++state.workspace.activePollEpoch;
     state.workspace.activeJobId = jobId;
     signalPath.hidden = false;
 
@@ -478,17 +662,20 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
       jobId,
       videoId,
       title,
-      video: options.video || { video_id: videoId, filename: title },
-      isUrlSource: options.source === "url",
-      playerDeferred: Boolean(options.deferPlayer),
+      isUrlSource: options.source === "url" || Boolean(options.initialJob && options.initialJob.download),
+      refreshedAfterDownload: false,
       stageKey: null,
       stageSince: Date.now(),
       errors: 0,
     };
-    const isCurrent = () => state.workspace.activeJobId === jobId;
+    const isCurrent = () => state.workspace.activePollEpoch === pollEpoch;
     let inFlight = false;
 
-    paintInitial(run, options.video && options.video.current_stage);
+    const scheduleNext = delay => {
+      if (!isCurrent()) return;
+      clearPollTimer();
+      state.workspace.jobPollTimer = window.setTimeout(poll, delay);
+    };
 
     const poll = async () => {
       if (inFlight || !isCurrent()) return;
@@ -525,9 +712,12 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
         }
       } finally {
         inFlight = false;
-        if (!keepPolling) pollNow = null;
+        if (!keepPolling && isCurrent()) {
+          pollNow = null;
+          state.workspace.activeJobId = null;
+        }
         if (keepPolling && isCurrent()) {
-          state.workspace.jobPollTimer = window.setTimeout(poll, nextDelay);
+          scheduleNext(nextDelay);
         }
       }
     };
@@ -535,141 +725,263 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     pollNow = () => {
       if (!inFlight && isCurrent()) poll();
     };
-    poll();
+
+    if (options.initialJob) {
+      lastStepsKey = null;
+      const done = handleJobUpdate(options.initialJob, run);
+      if (!done && isCurrent()) {
+        scheduleNext(options.initialJob.download ? POLL_FAST_MS : POLL_NORMAL_MS);
+      } else if (done && isCurrent()) {
+        pollNow = null;
+        state.workspace.activeJobId = null;
+      }
+    } else {
+      paintInitial(run, options.initialStage);
+      poll();
+    }
   }
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && pollNow) pollNow();
   });
 
-  // ───────────── Entry points ─────────────
+  // ───────────── Unified entry points ─────────────
+
+  /**
+   * Single entry point for selecting/opening any existing video in the center panel.
+   * Always verifies live job state via GET /jobs/{job_id} before releasing the player,
+   * so stale library snapshots can never mount the player during a live download.
+   */
+  async function selectVideo(video, { seekTimestamp = null } = {}) {
+    if (!video || !video.video_id) {
+      stopJobPolling();
+      clearIngestError();
+      state.workspace.centerEpoch += 1;
+      transitionCenter({ centerState: CENTER_STATE.IDLE, mediaAvailable: false });
+      return { playable: false, state: CENTER_STATE.IDLE };
+    }
+
+    const epoch = ++state.workspace.centerEpoch;
+    stopJobPolling();
+    clearIngestError();
+    pendingSeek = seekTimestamp != null ? { videoId: video.video_id, timestamp: seekTimestamp } : null;
+
+    if (!video.job_id) {
+      signalPath.hidden = true;
+      transitionCenter({ centerState: CENTER_STATE.IDLE, mediaAvailable: false });
+      return { playable: false, state: CENTER_STATE.IDLE };
+    }
+
+    // Hold safely in LOADING (gate closed, no playback-token request) until live job confirms state.
+    const snapshotStatus = normalize(video.status);
+    if (snapshotStatus === JOB_STATUS.COMPLETED || snapshotStatus === JOB_STATUS.FAILED) {
+      signalPath.hidden = true;
+    }
+    transitionCenter({
+      centerState: CENTER_STATE.LOADING,
+      mediaAvailable: false,
+      video: {
+        video_id: video.video_id,
+        filename: video.filename || video.video_id,
+        job_id: video.job_id,
+        status: JOB_STATUS.PENDING,
+        current_stage: "downloading",
+        summary: video.summary || "",
+        chapters: video.chapters || null,
+      },
+      isUrlSource: /^https?:\/\//i.test(String(video.filename || "")),
+    });
+
+    try {
+      const job = await api.getJob(video.job_id);
+      if (epoch !== state.workspace.centerEpoch) {
+        return { playable: false, state: state.workspace.centerState };
+      }
+
+      const decision = classifyJob(job.status, job.current_stage, job.download);
+      const mergedVideo = {
+        video_id: job.video_id || video.video_id,
+        filename: job.filename || video.filename || video.video_id,
+        job_id: job.job_id || video.job_id,
+        status: job.status,
+        current_stage: job.current_stage,
+        summary: job.summary || video.summary || "",
+        chapters: job.chapters || video.chapters || null,
+        error_message: job.error_message || null,
+        download: job.download || null,
+      };
+
+      if (state.workspace.scopedVideoId === mergedVideo.video_id && mergedVideo.filename !== state.workspace.scopedVideoTitle) {
+        setScope(mergedVideo.video_id, mergedVideo.filename);
+      }
+
+      if (decision.keepPolling) {
+        // Active job (either LOADING or PLAYABLE post-download): hand off to epoch-guarded poller
+        // which immediately applies transitionCenter() and keeps updating progress until terminal.
+        startPollingJob(video.job_id, mergedVideo.video_id, mergedVideo.filename, {
+          initialJob: job,
+          source: job.download ? "url" : undefined,
+        });
+        if (snapshotStatus === JOB_STATUS.COMPLETED) refreshVideos();
+      } else {
+        signalPath.hidden = true;
+        transitionCenter({
+          centerState: decision.centerState,
+          mediaAvailable: decision.mediaAvailable,
+          video: mergedVideo,
+          isUrlSource: Boolean(job.download),
+        });
+        if (decision.centerState === CENTER_STATE.FAILED) {
+          const prefix = decision.mediaAvailable ? "Processing failed: " : "Download failed: ";
+          showIngestError(job.error_message
+            ? prefix + job.error_message
+            : decision.mediaAvailable
+              ? "Processing failed. You can try adding the video again."
+              : "Download failed. Check the link and try again.");
+        }
+      }
+
+      return { playable: decision.mediaAvailable, state: decision.centerState };
+    } catch (_error) {
+      if (epoch !== state.workspace.centerEpoch) {
+        return { playable: false, state: state.workspace.centerState };
+      }
+      if (snapshotStatus === JOB_STATUS.COMPLETED) {
+        // Offline/transient fallback when reopening a known-completed video.
+        transitionCenter({
+          centerState: CENTER_STATE.PLAYABLE_DONE,
+          mediaAvailable: true,
+          video,
+        });
+        showToast("error", "Couldn’t confirm the latest video details.");
+        return { playable: true, state: CENTER_STATE.PLAYABLE_DONE };
+      }
+      if (state.ui.screen === "workspace") {
+        showToast("error", "Couldn’t load the latest video details. Reopen the video to retry.");
+      }
+      return { playable: false, state: CENTER_STATE.LOADING };
+    }
+  }
 
   function beginProcessing(jobId, videoId, title, options = {}) {
     const fromUrl = options.source === "url";
+    state.workspace.centerEpoch += 1;
+    pendingSeek = null;
     clearIngestError();
     signalPath.hidden = false;
     if (videoId) setScope(videoId, title);
-    showCenterForVideo({
-      video_id: videoId,
-      filename: title,
-      status: "processing",
-      current_stage: "downloading",
-      defer_player: true, // Always hide player until completely finished processing
-      from_url: fromUrl,
-      summary: fromUrl
-        ? "Fetching your video from its source. Your summary and chapters will appear here once it’s processed."
-        : "Processing has started. Your summary and chapters will appear here when it’s ready.",
+
+    transitionCenter({
+      centerState: CENTER_STATE.LOADING,
+      mediaAvailable: false,
+      video: {
+        video_id: videoId,
+        filename: title,
+        job_id: jobId,
+        status: JOB_STATUS.PENDING,
+        current_stage: "downloading",
+        summary: "",
+        chapters: null,
+      },
+      isUrlSource: fromUrl,
     });
+
     signalPath.scrollIntoView({ block: "nearest", behavior: "smooth" });
     startPollingJob(jobId, videoId, title, {
       source: options.source,
-      deferPlayer: true,
-      video: { video_id: videoId, filename: title, current_stage: "downloading" },
+      initialStage: "downloading",
     });
   }
 
+  function openWorkspace(focusTarget) {
+    showScreen("workspace", { focus: !focusTarget });
+    if (focusTarget === "upload") requestAnimationFrame(() => document.getElementById("dropZone").focus());
+    if (focusTarget === "search") requestAnimationFrame(() => document.getElementById("searchInput").focus());
+
+    // Immediately sync live job state when returning from another screen.
+    if (pollNow) {
+      pollNow();
+    } else if (
+      state.workspace.selectedVideoId &&
+      !state.workspace.mediaDeferred &&
+      state.player.state === "error"
+    ) {
+      const item = state.library.items.find(v => v.video_id === state.workspace.selectedVideoId);
+      loadPlayerForCurrentVideo(
+        item || { video_id: state.workspace.selectedVideoId, filename: document.getElementById("centerTitle").textContent },
+        { force: true }
+      );
+    }
+  }
+
   function openVideoInWorkspace(video) {
-    stopJobPolling();
     openWorkspace();
     setScope(video.video_id, video.filename);
     resetChat();
-    showVideoInCenter(video);
+    selectVideo(video);
   }
 
-  function openSearchResultVideo(video) {
+  function openSearchResultVideo(video, options = {}) {
     showScreen("workspace");
-    showVideoInCenter(video);
+    return selectVideo(video, options);
   }
 
-  function showVideoInCenter(video) {
-    if (!video || !video.video_id) return;
-    state.workspace.selectedVideoId = video.video_id;
-
-    if (!video.job_id) {
-      centerEmpty.hidden = false;
-      centerContent.classList.remove("show");
-      return;
+  /**
+   * Unified jump handler for both Search results and Chat source citations.
+   * Respects the center-panel state machine: never calls player.loadVideo() while downloading.
+   */
+  async function jumpToVideoMoment(videoId, timestamp, fallbackTitle) {
+    const targetTime = Number(timestamp);
+    if (!Number.isFinite(targetTime)) {
+      showToast("error", "This result has no usable timestamp.");
+      return { jumped: false, reason: "invalid_timestamp" };
+    }
+    if (!videoId) {
+      showToast("error", "The source video could not be opened.");
+      return { jumped: false, reason: "missing_video" };
     }
 
-    if (isJobActive(video.status)) {
-      // Anything that is not completed/failed is still in flight: loader + polling, no player.
-      showCenterForVideo({ ...video, defer_player: true });
-      startPollingJob(video.job_id, video.video_id, video.filename, { video, deferPlayer: true });
-    } else {
-      stopJobPolling();
-      showCenterForVideo({ ...video }); // shouldDeferPlayer() decides (completed → player, failed download → placeholder)
-      loadFinalJobDetails(video);
-    }
-  }
+    const seekRequestId = ++state.player.seekRequestId;
+    showScreen("workspace");
 
-  async function loadFinalJobDetails(video) {
+    const alreadyPlayable =
+      state.workspace.selectedVideoId === videoId &&
+      !state.workspace.mediaDeferred &&
+      (state.workspace.centerState === CENTER_STATE.PLAYABLE ||
+        state.workspace.centerState === CENTER_STATE.PLAYABLE_DONE ||
+        state.workspace.centerState === CENTER_STATE.FAILED);
+
+    if (!alreadyPlayable) {
+      const videoItem = await findVideo(videoId);
+      if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
+      if (!videoItem) {
+        showToast("error", "The source video could not be opened.");
+        return { jumped: false, reason: "not_found" };
+      }
+
+      const result = await selectVideo(videoItem, { seekTimestamp: targetTime });
+      if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
+      if (!result.playable) {
+        if (result.state === CENTER_STATE.LOADING) {
+          showToast("success", "This video is still downloading — playback will jump to this moment automatically.");
+        }
+        return { jumped: false, reason: result.state };
+      }
+      return { jumped: true };
+    }
+
     try {
-      const job = await api.getJob(video.job_id);
-      if (state.workspace.selectedVideoId !== video.video_id) return;
-
-      // The library snapshot can be stale. If the live job is still running, go back to
-      // the loader and resume tracking instead of mounting the player.
-      if (isJobActive(job.status)) {
-        showCenterForVideo({
-          ...video,
-          status: job.status,
-          current_stage: job.current_stage,
-          defer_player: true,
-        });
-        startPollingJob(video.job_id, video.video_id, video.filename, {
-          video: { ...video, current_stage: job.current_stage },
-          deferPlayer: true,
-        });
-        refreshVideos();
-        return;
+      await player.loadVideo(videoId, fallbackTitle);
+      if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
+      await performSeekAndReveal(targetTime);
+      return { jumped: true };
+    } catch (error) {
+      if (error && (error.code === "SUPERSEDED" || error.code === "DEFERRED")) {
+        return { jumped: false, reason: error.code };
       }
-
-      showCenterForVideo({
-        ...video,
-        summary: job.summary || video.summary,
-        chapters: job.chapters || video.chapters,
-        status: job.status,
-        current_stage: job.current_stage,
-        error_message: job.error_message,
-      });
-    } catch (_error) {
-      if (state.workspace.selectedVideoId === video.video_id && state.ui.screen === "workspace") {
-        showToast("error", "Couldn’t load the latest video details. Reopen the video to retry.");
-      }
+      if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
+      return { jumped: false, reason: "playback_error" };
     }
-  }
-
-  function showCenterForVideo(video) {
-    if (video.video_id) state.workspace.selectedVideoId = video.video_id;
-    workspaceDeleteBtn.hidden = !video.video_id;
-
-    const defer = Boolean(video.defer_player) || shouldDeferPlayer(video.status, video.current_stage);
-    if (defer) {
-      deferMedia(normalize(video.status) === "failed");
-    } else {
-      releaseMedia();
-      if (video.video_id) player.ensureVideoLoaded(video);
-    }
-
-    centerEmpty.hidden = true;
-    centerContent.classList.add("show");
-    document.getElementById("centerTitle").textContent = video.filename || video.video_id || "Video";
-    document.getElementById("centerSummary").textContent = video.summary || (video.error_message
-      ? "Processing failed: " + video.error_message
-      : video.status === "failed"
-        ? "Processing did not complete. Try adding this video again if you still need it indexed."
-        : "No summary yet. This video may still be processing.");
-
-    const chaptersLabel = document.getElementById("chaptersLabel");
-    const chaptersDivider = document.getElementById("chaptersDivider");
-    const chaptersContainer = document.getElementById("centerChapters");
-    const chapters = parseChapters(video.chapters);
-    chaptersLabel.hidden = chapters.length === 0;
-    chaptersDivider.hidden = chapters.length === 0;
-    chaptersContainer.innerHTML = chapters.map((chapter, index) => {
-      const label = chapter && (chapter.title || chapter.text) || JSON.stringify(chapter) || "Chapter";
-      return `<div class="chapter-item"><span class="chapter-marker" aria-hidden="true">${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
-    }).join("");
   }
 
   document.getElementById("clearScope").addEventListener("click", () => setScope(null, null));
@@ -688,24 +1000,13 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
   });
 
   function reset() {
+    state.workspace.centerEpoch += 1;
     stopJobPolling();
-    state.workspace.scopedVideoId = null;
-    state.workspace.scopedVideoTitle = null;
-    state.workspace.selectedVideoId = null;
-    state.workspace.mediaDeferred = false;
+    pendingSeek = null;
     signalPath.hidden = true;
     lastStepsKey = null;
-    setMediaPlaceholder(null);
-    player.reset();
     clearIngestError();
-    centerEmpty.hidden = false;
-    centerContent.classList.remove("show");
-    document.getElementById("centerTitle").textContent = "—";
-    workspaceDeleteBtn.hidden = true;
-    document.getElementById("centerSummary").textContent = "";
-    document.getElementById("centerChapters").innerHTML = "";
-    document.getElementById("chaptersLabel").hidden = true;
-    document.getElementById("chaptersDivider").hidden = true;
+    transitionCenter({ centerState: CENTER_STATE.IDLE, mediaAvailable: false });
     setScope(null, null);
   }
 
@@ -713,8 +1014,8 @@ export function createWorkspaceFeature({ player, refreshVideos, resetChat }) {
     openWorkspace,
     openVideoInWorkspace,
     openSearchResultVideo,
-    showVideoInCenter,
-    showCenterForVideo,
+    jumpToVideoMoment,
+    selectVideo,
     beginProcessing,
     startPollingJob,
     stopJobPolling,

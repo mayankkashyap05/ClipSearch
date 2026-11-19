@@ -103,7 +103,6 @@ export function createSearchFeature({ player, workspace, library }) {
   }
 
   async function playSearchResult(result, index) {
-    const requestId = ++state.player.seekRequestId;
     const timestamp = Number(result.timestamp);
     if (!Number.isFinite(timestamp)) {
       showToast("error", "This result has no usable timestamp.");
@@ -115,32 +114,7 @@ export function createSearchFeature({ player, workspace, library }) {
       return;
     }
     setActiveResult(index);
-
-    try {
-      if (state.workspace.selectedVideoId !== videoId || state.player.videoId !== videoId) {
-        const videoItem = await library.findVideo(videoId);
-        if (requestId !== state.player.seekRequestId) return;
-        if (!videoItem) throw new Error("The source video could not be opened.");
-        workspace.openSearchResultVideo(videoItem);
-      }
-      await player.loadVideo(videoId);
-      if (requestId !== state.player.seekRequestId) return;
-      const played = await player.seekTo(timestamp);
-      if (requestId !== state.player.seekRequestId) return;
-      const label = formatTime(player.getElement().currentTime);
-      state.player.jumpedAt = Date.now();
-      if (played) {
-        player.setPlayerState("ready", "Playing from " + label);
-        player.showResumeButton(false);
-      } else {
-        player.setPlayerState("ready", "Jumped to " + label + " · press Play to continue");
-        player.showResumeButton(true);
-      }
-      player.reveal();
-    } catch (error) {
-      if (error.message === "superseded" || requestId !== state.player.seekRequestId) return;
-      player.setPlayerState("error", player.friendlyPlaybackError(error));
-    }
+    await workspace.jumpToVideoMoment(videoId, timestamp, videoTitleFor(videoId));
   }
 
   form.addEventListener("submit", runSearch);

@@ -17,17 +17,24 @@ configureApi({
   unauthorized: () => authFeature && authFeature.signOut(false),
 });
 
-// The player may never request a stream for a video whose media is still being produced.
+// Strict readiness gate: the player may only request a token/stream for the currently
+// selected video once the workspace state machine has confirmed its media is servable.
 const player = createPlayer({
-  canLoad: videoId => !(state.workspace.mediaDeferred && state.workspace.selectedVideoId === videoId),
+  canLoad: videoId =>
+    Boolean(videoId) &&
+    state.workspace.selectedVideoId === videoId &&
+    !state.workspace.mediaDeferred,
 });
-const chat = createChatFeature({ player });
+
 let library;
+let chat;
 const workspace = createWorkspaceFeature({
   player,
   refreshVideos: () => library && library.refreshVideos(),
-  resetChat: () => chat.reset(),
+  findVideo: videoId => (library ? library.findVideo(videoId) : Promise.resolve(null)),
+  resetChat: () => chat && chat.reset(),
 });
+chat = createChatFeature({ workspace });
 library = createLibraryFeature({
   openWorkspace: focusTarget => workspace.openWorkspace(focusTarget),
   openVideo: video => workspace.openVideoInWorkspace(video),
