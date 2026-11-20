@@ -1,5 +1,6 @@
 """Sharing contract tests. Use a populated temporary SQLite DB; no model downloads."""
 import importlib.util
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
@@ -135,6 +136,15 @@ def test_public_projections_queries_and_routes(site):
     site.api.ask_about_video.return_value = {"answer": "Hello", "sources": []}
     assert c.get(path + "/chat", params={"question": "What?", **scope}).json() == site.api.ask_about_video.return_value
     site.api.ask_about_video.assert_called_once_with("What?", "movie", "owner")
+    site.api.ask_about_video.reset_mock()
+    history = [{"role": "user", "content": "What does the speaker say about memory?"},
+               {"role": "assistant", "content": "They say it shapes decisions."}]
+    followup = c.get(path + "/chat", params={"question": "Why does that matter?", "history": json.dumps(history)})
+    assert followup.status_code == 200
+    site.api.ask_about_video.assert_called_once_with("Why does that matter?", "movie", "owner", history=history)
+    site.api.ask_about_video.reset_mock()
+    assert c.get(path + "/chat", params={"question": "What?", "history": "not-json"}).status_code == 200
+    site.api.ask_about_video.assert_called_once_with("What?", "movie", "owner")
     for url in [f"/share/{token}", f"/share/{token}/", "/share/revoked"]:
         assert '/src/main.js?v=3' in c.get(url).text
     assert c.get("/no-such-page").status_code == 404
@@ -224,6 +234,21 @@ def test_embedded_qdrant_isolates_both_ids(site, tmp_path, monkeypatch):
         assert answer["sources"] == [{"timestamp": 3, "type": "speech", "text": "public moment"}]
         prompt = chat.chat.call_args.args[0][-1]["content"]
         assert "public moment" in prompt and "private" not in prompt
+
+        queries = []
+        chat.search = lambda query, **kwargs: (queries.append(query), index.search(query, **kwargs))[1]
+        chat.ask_about_video(
+            "Why does that matter?", "movie", "owner",
+            history=[{"role": "user", "content": "What does the speaker say about memory?"},
+                     {"role": "assistant", "content": "They say it shapes decisions."}],
+        )
+        followup_prompt = chat.chat.call_args.args[0][-1]["content"]
+        assert "RECENT CONVERSATION" in followup_prompt
+        assert "What does the speaker say about memory?" in followup_prompt
+        assert "LATEST QUESTION: Why does that matter?" in followup_prompt
+        assert len(queries) == 1
+        assert queries[0].startswith("Earlier question: What does the speaker say about memory?")
+        assert queries[0].endswith("Follow-up question: Why does that matter?")
     finally:
         index._get_client().close()
 

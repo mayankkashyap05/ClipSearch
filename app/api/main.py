@@ -5,6 +5,7 @@ retrieve results, and search. Also serves the frontend at "/".
 Run with a single process (embedded Qdrant locks its data folder):
     uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 """
+import json
 import re
 import secrets
 import uuid
@@ -350,16 +351,39 @@ def search_videos(
     return {"query": q, "results": results}
 
 
+def _parse_chat_history(raw_history: str | None) -> list[dict] | None:
+    """Decode the optional browser conversation window without trusting its shape."""
+    if not raw_history:
+        return None
+    try:
+        turns = json.loads(raw_history)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(turns, list):
+        return None
+    clean = []
+    for turn in turns[-6:]:
+        if not isinstance(turn, dict) or turn.get("role") not in ("user", "assistant"):
+            continue
+        content = turn.get("content")
+        if isinstance(content, str) and content.strip():
+            clean.append({"role": turn["role"], "content": content.strip()[:1200]})
+    return clean or None
+
+
 @app.get("/chat")
 def chat_about_video(
     video_id: str,
     question: str,
+    history: str | None = Query(default=None, max_length=12000),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _get_owned_video_or_404(db, video_id, current_user)
-    result = ask_about_video(question, video_id, current_user.id)
-    return result
+    conversation = _parse_chat_history(history)
+    if conversation:
+        return ask_about_video(question, video_id, current_user.id, history=conversation)
+    return ask_about_video(question, video_id, current_user.id)
 
 
 @app.get("/videos")
@@ -607,9 +631,16 @@ def shared_search(q: str = Query(min_length=1, max_length=2048), limit: int = Qu
 
 
 @app.get("/shared/{share_token}/chat")
-def shared_chat(question: str = Query(min_length=1, max_length=2048), shared=Depends(_shared_context)):
+def shared_chat(
+    question: str = Query(min_length=1, max_length=2048),
+    history: str | None = Query(default=None, max_length=12000),
+    shared=Depends(_shared_context),
+):
     video, _, _ = shared
+    conversation = _parse_chat_history(history)
     with _public_inference():
+        if conversation:
+            return ask_about_video(question, video.id, video.owner_id, history=conversation)
         return ask_about_video(question, video.id, video.owner_id)
 
 

@@ -99,8 +99,10 @@ export const api = {
     return requestJson(`/shared/${encodeURIComponent(token)}/search?` + new URLSearchParams({ q: query, limit }), { auth: false });
   },
 
-  askSharedVideo(token, question) {
-    return requestJson(`/shared/${encodeURIComponent(token)}/chat?` + new URLSearchParams({ question }), { auth: false });
+  askSharedVideo(token, question, history = []) {
+    const params = new URLSearchParams({ question });
+    if (history.length) params.set("history", JSON.stringify(history));
+    return requestJson(`/shared/${encodeURIComponent(token)}/chat?` + params, { auth: false });
   },
 
   listVideos() {
@@ -152,8 +154,9 @@ export const api = {
     return requestJson(path);
   },
 
-  askAboutVideo(videoId, question) {
-    const path = "/chat?video_id=" + encodeURIComponent(videoId) + "&question=" + encodeURIComponent(question);
-    return requestJson(path);
+  askAboutVideo(videoId, question, history = []) {
+    const params = new URLSearchParams({ video_id: videoId, question });
+    if (history.length) params.set("history", JSON.stringify(history));
+    return requestJson("/chat?" + params);
   },
 };

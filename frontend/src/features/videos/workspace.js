@@ -233,7 +233,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
       document.getElementById("scopeChipLabel").textContent = "Video: " + (title || videoId);
       chatInput.disabled = state.chat.pending;
       chatButton.disabled = state.chat.pending;
-      chatInput.placeholder = "Ask about this video…";
+      chatInput.placeholder = "Ask a question or follow up…";
       disabledNote.hidden = true;
       chatContext.hidden = false;
       chatContext.textContent = title || videoId;
