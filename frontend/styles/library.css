@@ -114,3 +114,9 @@
   .video-thumb { width: 2.15rem; height: 2.15rem; }
   .status-pill { padding-inline: 0.38rem; }
 }
+
+.video-row .row-action { min-height: 2.2rem; padding-inline: 0.6rem; color: var(--accent); }
+
+.video-row[data-video-id] { cursor: pointer; }
+.row-open { background: transparent; padding: 0; text-align: left; }
+.video-row [data-delete-video] { min-height: 2.2rem; padding-inline: .6rem; }

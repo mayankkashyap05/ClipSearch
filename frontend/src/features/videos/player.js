@@ -1,5 +1,5 @@
-import { api, apiUrl } from "../../services/api.js";
-import { state } from "../../state/app-state.js";
+import { api, apiUrl } from "../../services/api.js?v=3";
+import { state } from "../../state/app-state.js?v=3";
 import { formatTime } from "../../utils/format.js";
 
 const PLAYBACK_TOKEN_REFRESH_MS = 45 * 60 * 1000; // Backend playback tokens expire after 60 minutes.
@@ -30,7 +30,7 @@ function isPermanentHttpError(error) {
  *   onMediaNotReady?: (videoId: string) => void,
  * }} [options]
  */
-export function createPlayer({ canLoad = () => true, onMediaNotReady = () => {} } = {}) {
+export function createPlayer({ canLoad = () => true, onMediaNotReady = () => {}, onUnavailable = () => {} } = {}) {
   const video = document.getElementById("videoPlayer");
   const shell = document.getElementById("playerShell");
   const status = document.getElementById("playerStatus");
@@ -101,6 +101,7 @@ export function createPlayer({ canLoad = () => true, onMediaNotReady = () => {} 
   }
 
   async function getVideoStreamUrl(videoId) {
+    if (state.share.active) return apiUrl(`/shared/${encodeURIComponent(state.share.token)}/stream`);
     const data = await api.getPlaybackToken(videoId);
     return apiUrl(data.stream_url);
   }
@@ -248,7 +249,7 @@ export function createPlayer({ canLoad = () => true, onMediaNotReady = () => {} 
     if (force || player.videoId !== videoId || !player.loadPromise) return false;
     if (player.state === "loading") return true;
     if (player.state === "ready") {
-      return Date.now() - player.tokenIssuedAt < PLAYBACK_TOKEN_REFRESH_MS;
+      return state.share.active || Date.now() - player.tokenIssuedAt < PLAYBACK_TOKEN_REFRESH_MS;
     }
     return false;
   }
@@ -374,6 +375,7 @@ export function createPlayer({ canLoad = () => true, onMediaNotReady = () => {} 
       player.loadPromise = null;
       const finalError = lastError || new Error("This video could not be played.");
       setPlayerState("error", friendlyPlaybackError(finalError));
+      if (state.share.active && finalError.status === 404) onUnavailable();
       if (!isPermanentHttpError(finalError)) {
         schedulePostErrorRecovery(videoId, player.title, epoch, 0);
       }

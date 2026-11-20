@@ -433,3 +433,7 @@
   .media-pending-orb,
   .signal-path[data-waiting="true"] .signal-meter span { animation: none; }
 }
+#workspaceShareBtn { margin-left: auto; color: var(--accent); }
+button.chapter-item { background: transparent; text-align: left; border-radius: var(--radius-sm); }
+button.chapter-item:hover { background: var(--accent-soft); color: var(--accent); }
+button.chapter-item::after { display: none; }

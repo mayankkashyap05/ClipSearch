@@ -1,5 +1,5 @@
-import { api } from "../../services/api.js";
-import { state } from "../../state/app-state.js";
+import { api } from "../../services/api.js?v=3";
+import { state } from "../../state/app-state.js?v=3";
 import { formatTime } from "../../utils/format.js";
 
 export function createChatFeature({ workspace }) {
@@ -79,13 +79,16 @@ export function createChatFeature({ workspace }) {
     const pending = appendMessage("answer", "Looking through the indexed moments…", "pending");
 
     try {
-      const data = await api.askAboutVideo(videoId, question);
+      const data = state.share.active
+        ? await api.askSharedVideo(state.share.token, question)
+        : await api.askAboutVideo(videoId, question);
       if (requestId !== state.chat.requestId) return;
       pending.remove();
       appendAnswer(data.answer, Array.isArray(data.sources) ? data.sources : [], videoId);
     } catch (error) {
       if (requestId !== state.chat.requestId) return;
       pending.remove();
+      if (state.share.active && error.status === 404) return workspace.sharedUnavailable();
       appendMessage("answer", `I couldn’t get an answer: ${error.message}. You can ask again.`, "error");
     } finally {
       if (requestId === state.chat.requestId) {

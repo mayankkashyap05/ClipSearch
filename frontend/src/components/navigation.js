@@ -1,8 +1,9 @@
-import { state } from "../state/app-state.js";
+import { state } from "../state/app-state.js?v=3";
 
 const TOPBAR_LABELS = { home: "LIBRARY", workspace: "VIDEO WORKSPACE" };
 
 export function showScreen(screenId, options = {}) {
+  if (state.share.active && screenId !== "workspace") return;
   const signin = document.getElementById("signin");
   const appShell = document.getElementById("appShell");
   const viewport = document.getElementById("pageViewport");
@@ -19,7 +20,7 @@ export function showScreen(screenId, options = {}) {
     document.querySelectorAll(".app-page").forEach(item => item.classList.toggle("active", item === page));
     state.ui.screen = screenId;
     const label = document.getElementById("topbarLabel");
-    if (label) label.textContent = TOPBAR_LABELS[screenId] || "WORKSPACE";
+    if (label) label.textContent = state.share.active ? "SHARED VIDEO" : TOPBAR_LABELS[screenId] || "WORKSPACE";
     updateNavigation(screenId);
     if (viewport) viewport.scrollTop = 0;
   }

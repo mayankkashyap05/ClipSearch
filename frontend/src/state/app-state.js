@@ -1,6 +1,7 @@
 export const DEFAULT_API_BASE = window.location.origin;
 
 export const state = {
+  share: { active: false, token: null, video: null, error: null },
   auth: {
     apiBase: localStorage.getItem("clipsearch_api_base") || DEFAULT_API_BASE,
     token: localStorage.getItem("clipsearch_token") || null,

@@ -5,7 +5,7 @@ IDs are plain string UUIDs so the same models work on SQLite and Postgres.
 import uuid
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Text, Enum, ForeignKey
+from sqlalchemy import Boolean, Column, String, DateTime, Text, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -44,6 +44,19 @@ class Video(Base):
     created_at = Column(DateTime(timezone=True), default=_now)
     owner = relationship("User", back_populates="videos")
     jobs = relationship("ProcessingJob", back_populates="video", cascade="all, delete-orphan")
+
+    share = relationship("VideoShare", back_populates="video", uselist=False, cascade="all, delete-orphan")
+
+
+class VideoShare(Base):
+    __tablename__ = "video_shares"
+    id = Column(String(36), primary_key=True, default=_uuid)
+    video_id = Column(String(36), ForeignKey("videos.id", ondelete="CASCADE"),
+                      nullable=False, unique=True, index=True)
+    share_token = Column(String(64), nullable=False, unique=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now)
+    video = relationship("Video", back_populates="share")
 
 
 class ProcessingJob(Base):
