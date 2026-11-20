@@ -7,6 +7,7 @@ export function createChatFeature({ workspace }) {
   const button = document.getElementById("chatBtn");
   const form = document.getElementById("chatForm");
   const messages = document.getElementById("chatMessages");
+  let conversation = [];
 
   function appendMessage(role, text, extraClass = "") {
     const empty = document.getElementById("chatEmpty");
@@ -76,15 +77,18 @@ export function createChatFeature({ workspace }) {
     input.disabled = true;
     button.classList.add("btn-loading");
     button.setAttribute("aria-busy", "true");
-    const pending = appendMessage("answer", "Looking through the indexed moments…", "pending");
+    const pending = appendMessage("answer", "Finding the moments that best answer that…", "pending");
+    const priorConversation = conversation.slice(-6);
 
     try {
       const data = state.share.active
-        ? await api.askSharedVideo(state.share.token, question)
-        : await api.askAboutVideo(videoId, question);
+        ? await api.askSharedVideo(state.share.token, question, priorConversation)
+        : await api.askAboutVideo(videoId, question, priorConversation);
       if (requestId !== state.chat.requestId) return;
       pending.remove();
       appendAnswer(data.answer, Array.isArray(data.sources) ? data.sources : [], videoId);
+      conversation = [...priorConversation, { role: "user", content: question },
+        { role: "assistant", content: String(data.answer == null ? "" : data.answer) }].slice(-6);
     } catch (error) {
       if (requestId !== state.chat.requestId) return;
       pending.remove();
@@ -111,11 +115,12 @@ export function createChatFeature({ workspace }) {
   function reset() {
     state.chat.requestId += 1;
     state.chat.pending = false;
+    conversation = [];
     messages.replaceChildren();
     const empty = document.createElement("p");
     empty.className = "chat-empty";
     empty.id = "chatEmpty";
-    empty.textContent = "Questions and sourced answers will appear here.";
+    empty.textContent = "Ask in your own words. You can ask a follow-up, too.";
     messages.appendChild(empty);
     button.classList.remove("btn-loading");
     button.removeAttribute("aria-busy");
