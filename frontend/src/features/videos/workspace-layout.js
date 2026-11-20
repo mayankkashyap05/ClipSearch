@@ -1,4 +1,4 @@
-import { state } from "../../state/app-state.js";
+import { state } from "../../state/app-state.js?v=3";
 import { escapeHtml, videoStatus, videoStatusLabel } from "../../utils/format.js";
 
 const VIDEO_ICON = '<svg class="icon" aria-hidden="true"><use href="#icon-video"></use></svg>';
@@ -35,6 +35,7 @@ export function createWorkspaceLayout({ workspace, resetChat }) {
 
   /* ---------- Add-video drawer ---------- */
   function setIngestOpen(open, { focus = false } = {}) {
+    if (state.share.active && open) return;
     ingestPanel.hidden = !open;
     ingestToggle.setAttribute("aria-expanded", String(open));
     ingestToggle.classList.toggle("is-open", open);
@@ -85,7 +86,7 @@ export function createWorkspaceLayout({ workspace, resetChat }) {
 
   document.addEventListener("keydown", event => {
     if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (state.ui.screen !== "workspace") return;
+    if (state.ui.screen !== "workspace" || state.share.error || document.querySelector("dialog[open]")) return;
     if (event.target.closest && event.target.closest("input, textarea, select, [contenteditable]")) return;
     event.preventDefault();
     setTab("search");
@@ -101,7 +102,8 @@ export function createWorkspaceLayout({ workspace, resetChat }) {
       const active = isVideo ? !!scopedId : !scopedId;
       option.classList.toggle("active", active);
       option.setAttribute("aria-pressed", String(active));
-      if (isVideo) option.disabled = !selectedId;
+      option.hidden = state.share.active && !isVideo;
+      option.disabled = state.share.active || (isVideo && !selectedId);
     });
     scopeHint.textContent = scopedId
       ? `Searching only “${state.workspace.scopedVideoTitle || scopedId}”.`

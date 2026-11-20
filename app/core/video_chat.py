@@ -41,10 +41,11 @@ def ask_about_video(question: str, video_id: str, owner_id: str, n_context_chunk
             ],
             max_tokens=500,
         )
-    except RuntimeError as e:
+    except RuntimeError:
         # Local LLM not running: still return the retrieved moments so the
         # user gets something useful, plus a clear explanation.
-        answer_text = f"(Local AI model unavailable: {e})\n\nMost relevant moments are listed below."
+        # Answers are public on shared workspaces: never echo upstream URLs or error bodies.
+        answer_text = "The AI model is unavailable. The most relevant moments are listed below."
 
     return {
         "answer": answer_text,

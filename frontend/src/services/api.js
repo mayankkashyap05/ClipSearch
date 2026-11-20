@@ -83,6 +83,26 @@ export const api = {
     });
   },
 
+  createShareLink(videoId) {
+    return requestJson(`/videos/${encodeURIComponent(videoId)}/share`, { method: "POST" });
+  },
+
+  revokeShareLink(videoId) {
+    return requestJson(`/videos/${encodeURIComponent(videoId)}/share`, { method: "DELETE" });
+  },
+
+  getSharedVideo(token) {
+    return requestJson(`/shared/${encodeURIComponent(token)}`, { auth: false });
+  },
+
+  searchSharedVideo(token, query, limit = 8) {
+    return requestJson(`/shared/${encodeURIComponent(token)}/search?` + new URLSearchParams({ q: query, limit }), { auth: false });
+  },
+
+  askSharedVideo(token, question) {
+    return requestJson(`/shared/${encodeURIComponent(token)}/chat?` + new URLSearchParams({ question }), { auth: false });
+  },
+
   listVideos() {
     return requestJson("/videos");
   },

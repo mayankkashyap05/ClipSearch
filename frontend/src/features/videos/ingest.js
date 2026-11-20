@@ -1,4 +1,4 @@
-import { api } from "../../services/api.js";
+import { api } from "../../services/api.js?v=3";
 import { showToast } from "../../components/feedback.js";
 
 const YOUTUBE_HOSTS = new Set([

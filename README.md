@@ -16,6 +16,14 @@ ClipSearch is a powerful, locally-hosted video library and search engine. It aut
 
 ---
 
+## Public video links
+
+After indexing completes, choose **Share** in the library or workspace. The link opens a single-video workspace without signing in. Viewers can play the original media, seek by chapter, search, and ask questions. They cannot manage the recording or access your library. **Revoke link** disables future requests; sharing again creates a different link. Revocation cannot erase media or text a viewer has already received.
+
+Startup adds the `video_shares` table to an existing SQLite database with the current users/videos/jobs schema. No column migration, reprocessing, or manual SQL is needed. Back up the database before deploying. This change does not repair unrelated legacy schemas.
+
+For public deployment, serve FastAPI and the frontend at the same reachable HTTPS origin. Use a random private JWT secret (never reuse an example value); redact `/share/`, `/shared/`, and query strings in proxy, application access logs, and analytics. Treat share URLs like passwords. Rate-limit public requests at the proxy: search and Ask use the server's inference resources. The app additionally bounds public query size, result count, and concurrent inference. Continue using a single API process with embedded Qdrant.
+
 ## 🏗️ Architecture & Tech Stack
 
 **Backend**

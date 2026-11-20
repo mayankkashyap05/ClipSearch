@@ -1,13 +1,13 @@
-import { api } from "../../services/api.js";
-import { state } from "../../state/app-state.js";
+import { api } from "../../services/api.js?v=3";
+import { state } from "../../state/app-state.js?v=3";
 import { setConnectionStatus, showToast } from "../../components/feedback.js";
-import { showScreen } from "../../components/navigation.js";
+import { showScreen } from "../../components/navigation.js?v=3";
 import { escapeHtml, formatCreatedAt, videoStatus, videoStatusLabel } from "../../utils/format.js";
 
 const VIDEO_ICON = '<svg class="icon" aria-hidden="true"><use href="#icon-video"></use></svg>';
 const ERROR_ICON = '<svg class="icon" aria-hidden="true"><path d="M12 8v4m0 4h.01"/><circle cx="12" cy="12" r="9"/></svg>';
 
-export function createLibraryFeature({ openWorkspace, openVideo }) {
+export function createLibraryFeature({ openWorkspace, openVideo, openShare }) {
   const list = document.getElementById("videoList");
 
   function enterHome() {
@@ -84,11 +84,12 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
       const subline = [stage && status !== "completed" ? stage : "", created].filter(Boolean).join(" · ");
       const title = video.filename || video.video_id || "Untitled video";
       return `
-        <div class="video-row" tabindex="0" role="button" data-video-id="${escapeHtml(video.video_id)}" aria-label="Open ${escapeHtml(title)}" style="cursor: pointer;">
+        <div class="video-row" data-video-id="${escapeHtml(video.video_id)}">
           <span class="video-thumb" aria-hidden="true">${VIDEO_ICON}</span>
-          <span class="video-meta"><span class="video-title">${escapeHtml(title)}</span><span class="video-sub">${escapeHtml(subline || "Added to your library")}</span></span>
+          <button type="button" class="video-meta row-open" aria-label="Open ${escapeHtml(title)}"><span class="video-title">${escapeHtml(title)}</span><span class="video-sub">${escapeHtml(subline || "Added to your library")}</span></button>
           <span class="status-pill ${status}">${videoStatusLabel(status)}</span>
-          <button type="button" class="btn btn-danger-quiet" data-delete-video="${escapeHtml(video.video_id)}" aria-label="Delete video" title="Delete video" style="margin-left: 0.75rem; flex: 0 0 auto; min-height: 2.2rem; padding: 0 0.6rem;">
+          ${status === "completed" ? `<button class="btn btn-secondary row-action" type="button" data-share-video="${escapeHtml(video.video_id)}" aria-label="Share ${escapeHtml(title)}" title="${video.share_token ? "Manage share link" : "Share video"}"><svg class="icon" aria-hidden="true"><use href="#icon-share"></use></svg></button>` : ""}
+          <button type="button" class="btn btn-danger-quiet" data-delete-video="${escapeHtml(video.video_id)}" aria-label="Delete video" title="Delete video">
             <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
           </button>
         </div>`;
@@ -136,16 +137,6 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
     return video || null;
   }
 
-  list.addEventListener("keydown", event => {
-    if (event.key === "Enter" || event.key === " ") {
-      const row = event.target.closest(".video-row");
-      if (row && event.target === row) {
-        event.preventDefault();
-        row.click();
-      }
-    }
-  });
-
   list.addEventListener("click", async event => {
     const retry = event.target.closest("[data-retry-videos]");
     if (retry) {
@@ -158,6 +149,13 @@ export function createLibraryFeature({ openWorkspace, openVideo }) {
       return;
     }
     
+    const share = event.target.closest("[data-share-video]");
+    if (share) {
+      event.stopPropagation();
+      openShare(share.dataset.shareVideo);
+      return;
+    }
+
     // Intercept the delete button click
     const delBtn = event.target.closest("[data-delete-video]");
     if (delBtn) {

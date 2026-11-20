@@ -1,7 +1,7 @@
-import { api } from "../../services/api.js";
-import { state } from "../../state/app-state.js";
+import { api } from "../../services/api.js?v=3";
+import { state } from "../../state/app-state.js?v=3";
 import { showToast } from "../../components/feedback.js";
-import { showScreen } from "../../components/navigation.js";
+import { showScreen } from "../../components/navigation.js?v=3";
 import { escapeHtml, formatTime, parseChapters } from "../../utils/format.js";
 
 // ───────────── Backend status / stage contract ─────────────
@@ -192,7 +192,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
 
   workspaceDeleteBtn.addEventListener("click", async () => {
     const videoId = state.workspace.selectedVideoId;
-    if (!videoId) return;
+    if (state.share.active || !videoId) return;
     if (confirm("Are you sure you want to delete this video? This cannot be undone.")) {
       try {
         await api.deleteVideo(videoId);
@@ -205,6 +205,11 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     }
   });
 
+  document.getElementById("centerChapters").addEventListener("click", event => {
+    const chapter = event.target.closest("[data-chapter-start]");
+    if (chapter) jumpToVideoMoment(state.workspace.selectedVideoId, Number(chapter.dataset.chapterStart));
+  });
+
   function clearIngestError() {
     ingestError.textContent = "";
   }
@@ -214,6 +219,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
   }
 
   function setScope(videoId, title) {
+    if (state.share.active && (!videoId || videoId !== state.share.video?.video_id)) return;
     state.workspace.scopedVideoId = videoId || null;
     state.workspace.scopedVideoTitle = videoId ? (title || videoId) : null;
     const chip = document.getElementById("scopeChip");
@@ -503,6 +509,9 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     chaptersDivider.hidden = chapters.length === 0;
     chaptersContainer.innerHTML = chapters.map((chapter, index) => {
       const label = (chapter && (chapter.title || chapter.text)) || JSON.stringify(chapter) || "Chapter";
+      if (Number.isFinite(chapter?.start)) {
+        return `<button type="button" class="chapter-item" data-chapter-start="${chapter.start}"><span class="result-time">${formatTime(chapter.start)}</span><span>${escapeHtml(label)}</span></button>`;
+      }
       return `<div class="chapter-item"><span class="chapter-marker" aria-hidden="true">${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
     }).join("");
   }
@@ -516,6 +525,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     const wasDeferred = state.workspace.mediaDeferred;
 
     state.workspace.centerState = centerState;
+    document.getElementById("workspaceShareBtn").hidden = state.share.active || centerState !== CENTER_STATE.PLAYABLE_DONE;
 
     if (centerState === CENTER_STATE.IDLE || !video || !video.video_id) {
       state.workspace.selectedVideoId = null;
@@ -537,7 +547,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
 
     state.workspace.selectedVideoId = video.video_id;
     if (video.job_id) state.workspace.selectedJobId = video.job_id;
-    workspaceDeleteBtn.hidden = false;
+    workspaceDeleteBtn.hidden = state.share.active;
     centerEmpty.hidden = true;
     centerContent.classList.add("show");
 
@@ -757,6 +767,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
    * so stale library snapshots can never mount the player during a live download.
    */
   async function selectVideo(video, { seekTimestamp = null } = {}) {
+    if (state.share.active) return { playable: false, state: state.workspace.centerState };
     if (!video || !video.video_id) {
       stopJobPolling();
       clearIngestError();
@@ -947,6 +958,34 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
     }
   }
 
+  function sharedUnavailable() {
+    state.share.error = "unavailable";
+    state.share.video = null;
+    player.reset();
+    document.querySelector("#workspace .studio").hidden = true;
+    document.getElementById("scopeChip").hidden = true;
+    document.getElementById("sharedLoading").hidden = true;
+    document.getElementById("sharedErrorView").hidden = false;
+    document.getElementById("sharedErrorTitle").focus();
+  }
+
+  async function openSharedVideo(token) {
+    const studio = document.querySelector("#workspace .studio");
+    studio.hidden = true;
+    document.getElementById("sharedLoading").hidden = false;
+    try {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) throw new Error("Invalid link");
+      const video = await api.getSharedVideo(token);
+      state.share.video = video;
+      setScope(video.video_id, video.filename);
+      document.getElementById("sharedLoading").hidden = true;
+      studio.hidden = false;
+      transitionCenter({ centerState: CENTER_STATE.PLAYABLE_DONE, mediaAvailable: true, video });
+    } catch {
+      sharedUnavailable();
+    }
+  }
+
   function openVideoInWorkspace(video) {
     // Do NOT call openWorkspace() here — that would trigger pollNow/player recovery for the PREVIOUS video.
     showScreen("workspace", { focus: true });
@@ -997,6 +1036,7 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
         state.workspace.centerState === CENTER_STATE.PLAYABLE_DONE ||
         state.workspace.centerState === CENTER_STATE.FAILED);
 
+    if (!alreadyPlayable && state.share.active) return { jumped: false, reason: "unavailable" };
     if (!alreadyPlayable) {
       const videoItem = await findVideo(videoId);
       if (seekRequestId !== state.player.seekRequestId) return { jumped: false, reason: "superseded" };
@@ -1060,6 +1100,8 @@ export function createWorkspaceFeature({ player, refreshVideos, findVideo, reset
   }
 
   return {
+    sharedUnavailable,
+    openSharedVideo,
     openWorkspace,
     openVideoInWorkspace,
     openSearchResultVideo,

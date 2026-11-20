@@ -1,9 +1,9 @@
-import { api } from "../../services/api.js";
-import { state } from "../../state/app-state.js";
+import { api } from "../../services/api.js?v=3";
+import { state } from "../../state/app-state.js?v=3";
 import { showToast } from "../../components/feedback.js";
 import { escapeHtml, formatSpokenTime, formatTime } from "../../utils/format.js";
 
-export function createSearchFeature({ player, workspace, library }) {
+export function createSearchFeature({ player, workspace, findVideo }) {
   const form = document.getElementById("searchForm");
   const input = document.getElementById("searchInput");
   const button = document.getElementById("searchBtn");
@@ -34,7 +34,7 @@ export function createSearchFeature({ player, workspace, library }) {
         bestTime = timestamp;
       }
     });
-    if (best !== -1 && best !== state.workspace.activeResultIndex) setActiveResult(best);
+    if (best !== state.workspace.activeResultIndex) setActiveResult(best);
   }
 
   async function runSearch(event) {
@@ -50,24 +50,26 @@ export function createSearchFeature({ player, workspace, library }) {
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     resultsBox.setAttribute("aria-busy", "true");
-    resultsBox.innerHTML = '<div class="results-empty" role="status"><strong>Searching your library…</strong><p>Looking for relevant moments.</p></div>';
+    resultsBox.innerHTML = '<div class="results-empty" role="status"><strong>Searching indexed moments…</strong><p>Looking for relevant moments.</p></div>';
 
     try {
-      const data = await api.searchVideos(query, 8, state.workspace.scopedVideoId);
+      const data = state.share.active
+        ? await api.searchSharedVideo(state.share.token, query, 8)
+        : await api.searchVideos(query, 8, state.workspace.scopedVideoId);
       if (requestId !== state.workspace.searchRequestId) return;
       const results = Array.isArray(data.results) ? data.results : [];
       state.workspace.searchResults = results;
       state.workspace.activeResultIndex = -1;
       if (!results.length) {
-        const clearScopeAction = state.workspace.scopedVideoId
+        const clearScopeAction = !state.share.active && state.workspace.scopedVideoId
           ? '<button class="btn btn-quiet" type="button" data-clear-search-scope>Search all videos</button>'
           : "";
-        resultsBox.innerHTML = `<div class="results-empty"><strong>No matches found</strong><p>Nothing matched “${escapeHtml(query)}”. Try another phrase${state.workspace.scopedVideoId ? " or search your full library" : ""}.</p>${clearScopeAction}</div>`;
+        resultsBox.innerHTML = `<div class="results-empty"><strong>No matches found</strong><p>Nothing matched “${escapeHtml(query)}”. Try another phrase${clearScopeAction ? " or search your full library" : ""}.</p>${clearScopeAction}</div>`;
         return;
       }
 
       const unknownVideo = results.find(result => result.video_id && !videoTitleFor(result.video_id));
-      if (unknownVideo) await library.findVideo(unknownVideo.video_id);
+      if (!state.share.active && unknownVideo) await findVideo(unknownVideo.video_id);
       if (requestId !== state.workspace.searchRequestId) return;
 
       const showVideoName = !state.workspace.scopedVideoId;
@@ -85,8 +87,10 @@ export function createSearchFeature({ player, workspace, library }) {
             <p class="result-text">${escapeHtml(result.text)}</p>
           </button>`;
       }).join("");
+      syncActiveResultWithPlayhead();
     } catch (error) {
       if (requestId !== state.workspace.searchRequestId) return;
+      if (state.share.active && error.status === 404) return workspace.sharedUnavailable();
       resultsBox.innerHTML = `<div class="results-empty" role="alert"><strong>Search couldn’t finish</strong><p>${escapeHtml(error.message)}. Please try again.</p><button class="btn btn-secondary" type="button" data-retry-search>Try again</button></div>`;
     } finally {
       if (requestId === state.workspace.searchRequestId) {
@@ -98,6 +102,7 @@ export function createSearchFeature({ player, workspace, library }) {
   }
 
   function videoTitleFor(videoId) {
+    if (state.share.active) return state.share.video?.filename;
     const item = state.library.items.find(video => video.video_id === videoId);
     return item ? item.filename : null;
   }
@@ -135,7 +140,7 @@ export function createSearchFeature({ player, workspace, library }) {
     const result = state.workspace.searchResults[Number(resultButton.dataset.index)];
     if (result) playSearchResult(result, Number(resultButton.dataset.index));
   });
-  resultsBox.addEventListener("keydown", event => {
+  function navigateResults(event) {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = [...resultsBox.querySelectorAll(".result-item")];
     if (!items.length) return;
@@ -146,7 +151,9 @@ export function createSearchFeature({ player, workspace, library }) {
       : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
     items[next].focus();
     setActiveResult(next);
-  });
+  }
+  input.addEventListener("keydown", navigateResults);
+  resultsBox.addEventListener("keydown", navigateResults);
 
   player.setOnPlayheadChange(syncActiveResultWithPlayhead);
 

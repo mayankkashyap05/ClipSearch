@@ -1,7 +1,7 @@
-import { api } from "../../services/api.js";
-import { DEFAULT_API_BASE, state } from "../../state/app-state.js";
+import { api } from "../../services/api.js?v=3";
+import { DEFAULT_API_BASE, state } from "../../state/app-state.js?v=3";
 import { showToast } from "../../components/feedback.js";
-import { showScreen, updateAccount } from "../../components/navigation.js";
+import { showScreen, updateAccount } from "../../components/navigation.js?v=3";
 
 export function createAuthFeature({ onAuthenticated, onSignedOut }) {
   const tabLogin = document.getElementById("tabLogin");

@@ -147,3 +147,9 @@
   .sidebar-account { width: 100%; justify-content: center; padding-inline: 0; }
   .sidebar-signout { width: auto; justify-content: center; padding: var(--space-3); }
 }
+
+.shared-only, .shared-mode :is(.sidebar, .mobile-nav, .mobile-signout, .connection-status, #topbarSearch,
+  #home, #clearScope, #backToHome, #toggleIngest, #ingestPanel, #workspaceDeleteBtn, .workspace-status) { display: none; }
+.shared-mode .shared-only, .shared-mode .topbar-mark { display: inline-flex; }
+.shared-mode .page-viewport { padding-bottom: env(safe-area-inset-bottom); }
+.shared-badge { border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); padding: .35rem .7rem; font-size: var(--text-caption); }

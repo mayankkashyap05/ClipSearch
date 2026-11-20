@@ -6,25 +6,29 @@ Run with a single process (embedded Qdrant locks its data folder):
     uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 """
 import re
+import secrets
 import uuid
 import mimetypes
 import shutil
+from contextlib import contextmanager
+from threading import BoundedSemaphore
 from pathlib import Path
 from urllib.parse import quote
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request, Response
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
 from app.config import TEMP_DIR, BASE_DIR, PROCESSED_DIR
 from app.core.video_chat import ask_about_video
 from app.db.database import get_db, engine, Base
-from app.db.models import Video, ProcessingJob, JobStatus, User
+from app.db.models import Video, ProcessingJob, JobStatus, User, VideoShare
 from app.storage.s3_storage import upload_file, get_file_size, iter_file_range
 from app.workers.tasks import (
     process_video_task, process_video_from_url_task,
@@ -186,7 +190,7 @@ def get_video_content_type(video: Video) -> str:
     if suffix in _EXTRA_MIME_TYPES:
         return _EXTRA_MIME_TYPES[suffix]
     guessed, _ = mimetypes.guess_type(name)
-    return guessed or "application/octet-stream"
+    return guessed if guessed and guessed.startswith(("video/", "audio/")) else "application/octet-stream"
 
 
 def _parse_range_header(range_header: str | None, file_size: int):
@@ -204,6 +208,8 @@ def _parse_range_header(range_header: str | None, file_size: int):
     start_s, end_s = match.groups()
     if not start_s and not end_s:
         return None
+    if file_size == 0:
+        raise HTTPException(status_code=416, detail="Requested range not satisfiable")
     if not start_s:
         # Suffix range: last N bytes.
         suffix = int(end_s)
@@ -236,6 +242,8 @@ def stream_video(video: Video, request: Request) -> Response:
     download_name = Path(video.storage_key).name
     headers = {
         "Accept-Ranges": "bytes",
+        "Content-Security-Policy": "sandbox; default-src 'none'",
+        "X-Content-Type-Options": "nosniff",
         # Authenticated per-user media: never let shared caches keep it.
         "Cache-Control": "private, no-store",
         "Content-Disposition": f"inline; filename*=UTF-8''{quote(download_name)}",
@@ -301,6 +309,7 @@ def stream_owned_video(
 @app.get("/jobs/{job_id}")
 def get_job_status(
     job_id: str,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -312,9 +321,11 @@ def get_job_status(
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    response.headers["Cache-Control"] = "private, no-store"
     return {
         "job_id": job.id,
         "video_id": job.video_id,
+        "share_token": _active_token(job.video),
         "filename": job.video.filename if job.video else None,   # real title once known
         "status": job.status,
         "current_stage": job.current_stage,
@@ -353,26 +364,24 @@ def chat_about_video(
 
 @app.get("/videos")
 def list_videos(
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     videos = (
         db.query(Video)
         .filter(Video.owner_id == current_user.id)
+        .options(joinedload(Video.share))
         .order_by(Video.created_at.desc())
         .all()
     )
 
     results = []
     for video in videos:
-        latest_job = (
-            db.query(ProcessingJob)
-            .filter(ProcessingJob.video_id == video.id)
-            .order_by(ProcessingJob.created_at.desc())
-            .first()
-        )
+        latest_job = _get_latest_job(db, video.id)
         results.append({
             "video_id": video.id,
+            "share_token": _active_token(video),
             "filename": video.filename,
             "created_at": video.created_at.isoformat() if video.created_at else None,
             "job_id": latest_job.id if latest_job else None,
@@ -381,6 +390,7 @@ def list_videos(
             "summary": latest_job.summary if latest_job else None,
         })
 
+    response.headers["Cache-Control"] = "private, no-store"
     return {"videos": results, "count": len(results)}
 
 
@@ -493,6 +503,122 @@ def stop_live_session(session_id: str, current_user: User = Depends(get_current_
     if not stopped:
         raise HTTPException(status_code=404, detail="Live session not found")
     return {"session_id": session_id, "status": "stopped"}
+
+
+def _get_latest_job(db: Session, video_id: str):
+    return (db.query(ProcessingJob).filter_by(video_id=video_id)
+            .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.desc()).first())
+
+
+def _active_token(video: Video):
+    return video.share.share_token if video.share and video.share.is_active else None
+
+
+def _get_shared_video_or_404(db: Session, share_token: str):
+    share = (db.query(VideoShare).options(joinedload(VideoShare.video))
+             .filter_by(share_token=share_token, is_active=True).first())
+    video = share.video if share else None
+    job = _get_latest_job(db, video.id) if video and video.storage_key not in (None, "", "pending") else None
+    if not job or job.status != JobStatus.COMPLETED:
+        raise HTTPException(404, "Shared video unavailable", headers={"Cache-Control": "no-store"})
+    return video, job, share
+
+
+def _shared_context(share_token: str, response: Response, db: Session = Depends(get_db, scope="function")):
+    # Release the DB connection before a potentially long media transfer.
+    response.headers["Cache-Control"] = "private, no-store"
+    return _get_shared_video_or_404(db, share_token)
+
+
+@app.post("/videos/{video_id}/share")
+def create_share(video_id: str, response: Response, db: Session = Depends(get_db),
+                 current_user: User = Depends(get_current_user)):
+    video = _get_owned_video_or_404(db, video_id, current_user)
+    job = _get_latest_job(db, video_id)
+    if not job or job.status != JobStatus.COMPLETED or video.storage_key in (None, "", "pending"):
+        raise HTTPException(409, "Only fully processed videos can be shared")
+    share = video.share
+    if not share or not share.is_active:
+        token = secrets.token_urlsafe(24)
+        if share:
+            # A second concurrent reactivation must reuse the winner's token.
+            db.query(VideoShare).filter_by(id=share.id, is_active=False).update(
+                {VideoShare.share_token: token, VideoShare.is_active: True})
+        else:
+            db.add(VideoShare(video_id=video_id, share_token=token))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()  # concurrent first creation: read the unique winning row
+        share = db.query(VideoShare).filter_by(video_id=video_id, is_active=True).first()
+        if not share:
+            raise HTTPException(409, "Sharing changed. Please try again.")
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"video_id": video_id, "share_token": share.share_token,
+            "share_path": f"/share/{share.share_token}", "is_active": True, "created_at": share.created_at}
+
+
+@app.delete("/videos/{video_id}/share")
+def revoke_share(video_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _get_owned_video_or_404(db, video_id, current_user)
+    db.query(VideoShare).filter_by(video_id=video_id).update({VideoShare.is_active: False})
+    db.commit()
+    return {"status": "revoked", "video_id": video_id}
+
+
+@app.get("/shared/{share_token}")
+def shared_metadata(shared=Depends(_shared_context)):
+    video, job, share = shared
+    return {"video_id": video.id, "filename": video.filename, "created_at": video.created_at,
+            "status": job.status, "summary": job.summary, "chapters": job.chapters_json,
+            "content_type": get_video_content_type(video), "stream_url": f"/shared/{share.share_token}/stream"}
+
+
+@app.api_route("/shared/{share_token}/stream", methods=["GET", "HEAD"])
+def shared_stream(request: Request, shared=Depends(_shared_context)):
+    video, _, _ = shared
+    return stream_video(video, request)
+
+
+# The embedded deployment has one process. Avoid filling the request pool with
+# anonymous inference jobs; requests that cannot start immediately can retry.
+_public_inference_slots = BoundedSemaphore(2)
+
+
+@contextmanager
+def _public_inference():
+    if not _public_inference_slots.acquire(blocking=False):
+        raise HTTPException(429, "Shared search and Ask are busy. Please try again shortly.",
+                            headers={"Retry-After": "5", "Cache-Control": "no-store"})
+    try:
+        yield
+    finally:
+        _public_inference_slots.release()
+
+
+@app.get("/shared/{share_token}/search")
+def shared_search(q: str = Query(min_length=1, max_length=2048), limit: int = Query(8, ge=1, le=20),
+                  shared=Depends(_shared_context)):
+    video, _, _ = shared
+    with _public_inference():
+        results = qdrant_search(q, n_results=limit, video_id=video.id, owner_id=video.owner_id)
+    fields = ("video_id", "text", "type", "timestamp", "score", "rerank_score")
+    return {"query": q, "results": [{k: r[k] for k in fields if k in r} for r in results]}
+
+
+@app.get("/shared/{share_token}/chat")
+def shared_chat(question: str = Query(min_length=1, max_length=2048), shared=Depends(_shared_context)):
+    video, _, _ = shared
+    with _public_inference():
+        return ask_about_video(question, video.id, video.owner_id)
+
+
+@app.get("/share/{share_token}", include_in_schema=False)
+@app.get("/share/{share_token}/", include_in_schema=False)
+def shared_page(share_token: str):
+    return FileResponse(BASE_DIR / "frontend" / "index.html", headers={
+        "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex, nofollow", "Cache-Control": "no-store",
+    })
 
 
 # MUST stay last: a "/" mount catches everything, so it has to be registered
